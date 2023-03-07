@@ -1,0 +1,320 @@
+---
+title: "Exploratory Analysis"
+author: "Vildsvinene"
+date: "`r Sys.Date()`"
+output: 
+  bookdown::pdf_document2:
+    keep_tex: true
+    number_sections: true
+    toc: true
+toc-title: "Table of Contents"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, dev = "cairo_pdf")
+
+library(tidyverse)
+library(magrittr)
+library(lubridate)
+library(hms)
+library(sf)
+
+library(extrafont)
+library(patchwork)
+library(ggforce)
+
+library(kableExtra)
+
+library(conflicted)
+
+conflict_prefer("select", "dplyr")
+conflict_prefer("filter", "dplyr")
+conflict_prefer("extract", "magrittr")
+
+formatScientific <- Vectorize(function(x) {
+  
+  if (is.na(x)) return(NA)
+  if (x == 0) return("0")
+  
+  negativeFlag <- sign(x) == -1
+  
+  x <- abs(x)
+  log10Base <- log10(x)
+  
+  if (log10Base < 3 & log10Base > -2) {
+    
+    out <- if (log10Base < 0) as.character(signif(x, 2)) else as.character(round(x, 2))
+    
+  } 
+  else {
+    
+    log10Base <- floor(log10Base)
+    x <- x * 10^-log10Base
+    
+    if (round(x, 2) == 1) {
+      out <- paste0("10^{", log10Base, "}")
+    } 
+    else {
+      out <- paste0(round(x, 2), " \\times 10^{", log10Base, "}")
+    }
+  }
+  
+  out <- str_remove(out, "^1 ")
+  
+  if (negativeFlag) out <- paste0("-", out)
+  
+  return(
+    latex2exp::TeX(paste0("$", out, "$"))
+  )
+}, USE.NAMES = F, SIMPLIFY = T)
+```
+
+# Test Section
+
+First we load the data:
+
+```{r}
+boarRaw <- read_delim("data/Wildboar_gpstracks.csv",
+                      col_types = "ccccctnnnidT",
+                      delim = ";",
+                      locale = locale(
+                        decimal_mark = ".",
+                        grouping_mark = ","
+                      )) %>% 
+  mutate(TagTime = force_tz(TagTime, "Europe/Copenhagen", tzone_out = "UTC"),
+         UTC_Date = parse_date_time(UTC_Date, "%d-%m-%Y")) %>% 
+  filter(Latitude > 56.8 & Latitude < 56.9 & Longitude > 10.1 & Longitude < 10.3)
+
+boarRaw %>% 
+  head %>% 
+  select(1:7) %>% 
+  kable(caption = "First 7 columns of the raw data table",
+        booktabs = T) %>% 
+  kable_paper(latex_option = c("striped", "HOLD_position"),
+              full_width = F) %>% 
+  row_spec(0, T)
+
+boarRaw %>% 
+  head %>% 
+  select(8:14) %>% 
+  kable(caption = "Last 7 columns of the raw data table",
+        booktabs = T) %>% 
+  kable_paper(latex_option = c("striped", "HOLD_position"),
+              full_width = F) %>% 
+  row_spec(0, T)
+```
+
+
+## Data overview
+
+```{r, fig.height=22, fig.width=14, fig.de}
+characterDefaultPlot <- force(function(x) {
+  
+  lastCall <- sys.calls() %>%
+    extract((length(.)-1):length(.)) %>% 
+    sapply(deparse1) %>% 
+    str_remove_all(" |\n|\t") %>% 
+    str_extract("[^%>%]+?%>%[^%>%><=-]+$|(?<=\\()[^()]+?\\)+$") %>% 
+    str_remove_all("%>%.+$|\\)+$") %>% 
+    extract(which(!is.na(.) & nchar(.) != 0 & . != ".")) %>% 
+    last
+  
+  x <- force(x)
+  
+  list(ggplot(data = tibble(), aes(y = eval.parent(x))) +
+         geom_bar() +
+         scale_x_continuous(labels = formatScientific, n.breaks = 5) +
+         coord_cartesian(expand = F, clip = "off") +
+         labs(title = lastCall, y = NULL, x = "# Observations"))
+})
+
+coercibleToNumericDefaultPlot <- force(function(x) {
+  
+  lastCall <- sys.calls() %>%
+    extract((length(.)-1):length(.)) %>% 
+    sapply(deparse1) %>% 
+    str_remove_all(" |\n|\t") %>% 
+    str_extract("[^%>%]+?%>%[^%>%><=-]+$|(?<=\\()[^()]+?\\)+$") %>% 
+    str_remove_all("%>%.+$|\\)+$") %>% 
+    extract(which(!is.na(.) & nchar(.) != 0 & . != ".")) %>% 
+    last
+  
+  x <- force(x)
+  
+  xClass <- class(x) %>% first
+  
+  x <- as.numeric(x)
+  
+  meanDiff <- median(diff(sort(x)))
+  
+  tab <- table((x %/% meanDiff) * meanDiff)
+  
+  if (str_detect(xClass, regex("POSIX|DATE", T))) {
+    x <- as.POSIXct(x, origin = "1970-01-01")
+  } else if (xClass == "hms") {
+    x <- as_hms(x)
+  } else {
+    x <- as(x, xClass)
+  }
+  
+  tab <- tab/sum(tab, na.rm = T)
+  
+  effectiveUniqueValues <- exp(-sum(tab * log(tab))) %>% 
+    round
+  
+  .plot <- ggplot(data = tibble(), aes(x)) +
+    geom_histogram(bins = max(10, min(effectiveUniqueValues, 100))) +
+    scale_y_continuous(labels = formatScientific, n.breaks = 5) +
+    labs(title = lastCall, x = NULL, y = "# Observations")
+  
+  if (is.instant(x) | is.difftime(x)) {
+    .plot <- .plot + coord_flip(expand = F, clip = "off")
+  } 
+  else {
+    .plot <- .plot + 
+      scale_x_continuous(labels = formatScientific, n.breaks = 5) +
+      coord_cartesian(expand = F, clip = "off")
+  }
+  
+  list(.plot)
+})
+
+boarRaw %>%
+  # select(UTC_Date) %>% 
+  # slice_sample(n = 10000) %>%
+  summarize(
+    across(where(~suppressWarnings(!is.character(.) && any(!is.na(as.numeric(.))))), coercibleToNumericDefaultPlot),
+    across(where(is.character), characterDefaultPlot)
+  ) %>%
+  pivot_longer(everything()) %>% 
+  pull(value) %>% 
+  wrap_plots(ncol = 3) &
+  ggpubr::theme_pubr(base_family = "CMU Serif") +
+  theme(aspect.ratio = 1,
+        title = element_text(face = "bold"),
+        axis.text.x = element_text(vjust = 0),
+        plot.title = element_text(face = "bold", hjust = .5),
+        plot.background = element_blank())
+```
+
+```{r, fig.height=16, fig.width=12}
+library(ggmap)
+
+ggmap::register_google(readLines(".secrets/ggmapTOKEN"))
+
+gmap <- get_map(boarRaw %>% 
+                  select(Longitude, Latitude) %>% 
+                  summarize(across(everything(), mean, na.rm = T)) %>% 
+                  unlist,
+                zoom = 12,
+                source = "google",
+                maptype = "satellite") 
+  # ggmap_bbox()
+
+suppressWarnings(
+  boarRaw %>% 
+    filter(UniqueID == first(UniqueID)) %>% 
+    st_as_sf(coords = c("Longitude", "Latitude")) %>% 
+    st_set_crs(st_crs(4326)) %>% {
+      ggmap(gmap) +
+        stat_sf_coordinates(aes(color = UTC_Date), data = ., geom = "path", inherit.aes = F) +
+        coord_sf() +
+        facet_wrap(~month(UTC_Date), ncol = 3) +
+        ggpubr::theme_pubr(base_family = "CMU Serif", legend = "right") +
+        theme(title = element_text(face = "bold"),
+              panel.spacing.x = unit(1.5, "lines"),
+              panel.spacing.y = unit(1, "lines"))
+    }
+)
+```
+
+```{r}
+source("LoCoH.R")
+
+LoCoH_test <- boarRaw %>%
+  st_as_sf(coords = c("Longitude", "Latitude")) %>% 
+  group_by(UniqueID) %>% 
+  slice_sample(prop = 0.2) %>% 
+  ungroup %>% 
+  # filter(UniqueID == first(UniqueID)) %>%
+  mutate(timeNum = as.numeric(UTC_Time) + as.numeric(UTC_Date)) %>% 
+  LoCoH_custom(extra_vars = timeNum, 5, 15, 5, "kmeanspp") %>%
+  bind_rows
+
+ggmap(gmap) +
+  geom_sf(
+    inherit.aes = F,
+    data = LoCoH_test %>% 
+      filter(nCluster == 15),
+    fill = "transparent",
+    color = "white"
+  )
+```
+```{r, fig.width=8, fig.height=8}
+library(sf)
+
+austria_boar <- read_csv("data/boar_study_austria.csv") %>% 
+  filter(`location-long` > 15) %>%
+  st_as_sf(coords = c("location-long", "location-lat"))
+
+austria_bbox <- st_bbox(austria_boar)
+
+austria_map <- get_map(apply(st_coordinates(austria_boar), 2, mean), zoom = 12, source = "google", maptype = "satellite")
+
+suppressMessages(
+  ggmap(austria_map, maprange = F, extent = "normal",
+        base_layer = ggplot(data = austria_boar,
+                            aes(color = `individual-local-identifier`))) +
+    stat_sf_coordinates() +
+    scale_x_continuous(labels = ~parse(text = sf:::degreeLabelsEW(.))) +
+    scale_y_continuous(labels = ~parse(text = sf:::degreeLabelsNS(.))) +
+    coord_cartesian(expand = F) +
+    # coord_sf(xlim = austria_bbox[c("xmin", "xmax")], ylim = austria_bbox[c("ymin","ymax")], expand = F) +
+    theme(legend.position = "none",
+          aspect.ratio = 1) +
+    facet_wrap(~`individual-local-identifier`, scales = "free")
+)
+```
+
+```{r}
+library(stars)
+library(terra)
+
+hexRGB2Dec <- function(x) {
+  str_remove(x, "^#") %>% 
+    str_split_fixed("(?<=^.{2})|(?<=^.{4})", 3) %>% 
+    apply(2, function(y) strtoi(paste0("0x", y)))
+}
+
+ggmap_to_stars <- function(ggmap_obj) {
+  bbox <- attr(austria_map, "bb") %>% unlist %>% unname
+  xlim <- bbox[c(2, 4)]
+  ylim <- bbox[c(1,3)]
+  ggmap_dim <- dim(ggmap_obj)
+  
+  sf_dims <- st_dimensions(Latitude  = seq(ylim[1], ylim[2], length.out = ggmap_dim[2]),
+                           Longitude = seq(xlim[1], xlim[2], length.out = ggmap_dim[1]), 
+                           .raster = c("Latitude", "Longitude"))
+  
+  arr <- ggmap_obj %>% 
+    apply(1, hexRGB2Dec) %>% 
+    t %>%
+    array(dim = c(dim(ggmap_obj), 3)) 
+  
+  stars:::st_stars(list(R = arr[rev(seq(nrow(arr))),,1], G = arr[rev(seq(nrow(arr))),,2], B = arr[rev(seq(nrow(arr))),,3]),
+                           dimensions = sf_dims) %>% 
+    st_set_crs(st_crs(4326))
+}
+
+austria_stars <- austria_map %>% 
+  ggmap_to_stars() 
+
+
+ggplot() +
+  geom_stars(data = austria_stars,
+             aes(fill = rgb(R/255, G/255, B/255),
+                 x = Longitude, y = Latitude)) +
+  scale_fill_identity() +
+  coord_equal(expand = F)
+```
+
