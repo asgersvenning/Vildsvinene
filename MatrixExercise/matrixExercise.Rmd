@@ -1,16 +1,220 @@
 ---
-title: "Exercise"
+title: "Matrix Modelling Exercise"
 author: "Vildsvinegruppen"
 date: "`r Sys.Date()`"
-output: pdf_document
+output: 
+  bookdown::pdf_document2:
+    toc: false
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = F)
+
+library(tidyverse)
+library(magrittr)
+library(extrafont)
+
+sampleFromDist <- function(D, n = 1) {
+  
+  if (!all(names(D) == c("distribution", "parameters"))) stop("Incorrect distribution object.")
+  
+  if (tolower(D$distribution) == "gamma") {
+    rgamma(n, shape = D$parameters[1], rate = D$parameters[2])
+  }
+  else if (tolower(D$distribution) == "beta") {
+    rbeta(n, shape1 = D$parameters[1], shape2 = D$parameters[2])
+  }
+  else {
+    stop(paste0("Unknown distribution:", D$distribution))
+  }
+}
+
+```
+
+# Question
+
+How large is the maximal sustainable hunting pressure on wild boars in Tofte Skov?
+
+
+# Phenology Parameters
+
+From article (REF):
+
+```{r, echo = T}
+Fecundity <- list(distribution = "Gamma", parameters = c(47.4, 8.66))
+SexRatio <- list(distribution = "Beta", parameters = c(31.2, 29.2))
+SurvivalFemale <- list(distribution = "Beta", parameters = c(2.89, 1.46))
+SurvivalJuveniles <- list(distribution = "Beta", parameters = c(1.92, 1.54))
+SurvivalMale <- list(distribution = "Beta", parameters = c(2.82, 1.55))
+```
+
+```{r}
+oldPar <- par(mfrow = c(2, 3))
+
+Fecundity %>% 
+  sampleFromDist(100000) %>% 
+  hist(100, main = "Fecundity")
+
+SexRatio %>% 
+  sampleFromDist(100000) %>% 
+  hist(100, main = "Sex Ratio")
+
+SurvivalJuveniles %>% 
+  sampleFromDist(100000) %>% 
+  hist(100, main = "Survival Juvenile")
+
+SurvivalFemale %>% 
+  sampleFromDist(100000) %>% 
+  hist(100, main = "Survival Female")
+
+SurvivalMale %>% 
+  sampleFromDist(100000) %>% 
+  hist(100, main = "Survival Male")
+
+par(oldPar)
 ```
 
 
-# TEST
+\newpage
 
-## TEST 3
+# Population Transition Matrix
+
+Formulas from article (REF):
+
+```{r, echo = T}
+constructMatrix <- function(Pop, Fec, SR, Sj, Sf, Sm, K) {
+  ## Pop: Population structure after removal
+  ## Fec: Fecundity
+  ## SR : Sex Ratio
+  ## Sj : Survival juveniles
+  ## Sf : Survival female
+  ## Sm : survival male
+  ## K  : Carrying capacity
+  
+  TM <- matrix(0, nrow = 3, ncol = 3)
+  
+  # Juveniles born
+  TM[1, 2] <- Sf * Fec * exp(-sum(Pop)/K)
+  
+  # Juveniles maturing to females
+  TM[2, 1] <- Sj * SR
+  
+  # Juveniles maturing to males
+  TM[3, 1] <- Sj * (1 - SR)
+  
+  # Adult female surval
+  TM[2, 2] <- Sf
+  
+  # Adult male survival
+  TM[3, 3] <- Sm
+  
+  TM
+}
+```
+
+\newpage
+
+# Simulation loop
+
+```{r, echo = T}
+results <- lapply(rep(seq(10, 100, 5), each = 10), function(R) {
+  phenologyParameters <- list(
+    Fec = Fecundity %>% 
+      sampleFromDist,
+    SR = SexRatio %>% 
+      sampleFromDist,
+    Sf = SurvivalFemale %>% 
+      sampleFromDist,
+    Sm = SurvivalMale %>% 
+      sampleFromDist,
+    Sj = SurvivalJuveniles %>% 
+      sampleFromDist, #0.364
+    K = 4*800,
+    Pop = c(50, 70, 30)
+  )
+  
+  populationHistory <- matrix(ncol = 3, nrow = 0)
+  
+  
+  for (i in seq(100)) {
+    
+    phenologyParameters$Pop <- phenologyParameters$Pop -
+      as.vector(table(factor(sample.int(3, R, T), levels = c("1", "2", "3"))))
+    
+    PopMatrix <- do.call(constructMatrix, phenologyParameters)
+    
+    phenologyParameters$Pop <- as.vector(PopMatrix %*% phenologyParameters$Pop) 
+    
+    phenologyParameters$Pop[phenologyParameters$Pop < 0] <- 0
+    
+    
+    populationHistory <- rbind(populationHistory, phenologyParameters$Pop)
+    
+  }
+  
+  populationHistory %>% 
+    set_colnames(c("Juveniles", "Females", "Males")) %>% 
+    as_tibble() %>% 
+    mutate(
+      Generation = row_number(),
+      HuntingPressure = R
+    )
+}) %>% 
+  bind_rows()  
+```
+
+
+```{r}
+# results %>% 
+#   pivot_longer(c(Juveniles, Females, Males), names_to = "Stage", values_to = "Individuals") %>% 
+#   ggplot(aes(Generation, Individuals, color = Stage, group = paste0(Stage, Simulation))) +
+#   geom_line(alpha = 0.1,
+#             key_glyph = draw_key_point) +
+#   stat_summary_bin(aes(group = Stage),
+#                    binwidth = 5,
+#                    fun.data = median_hilow) +
+#   guides(color = guide_legend(override.aes = list(alpha = 1,
+#                                                   size = 2,
+#                                                   shape = 16))) +
+#   facet_wrap(~Stage, ncol = 1) +
+#   ggpubr::theme_pubr() +
+#   theme(aspect.ratio = 0.5)
+
+
+# results %>% 
+#   mutate(PopulationSize = Juveniles + Females + Males) %>% 
+#   # filter(Generation > 50) %>%
+#   ggplot(aes(HuntingPressure, PopulationSize, z = Generation)) +
+#   stat_summary_2d(binwidth = c(5, 50)) +
+#   # scale_color_viridis_c() +
+#   # geom_hex(aes(color = after_scale(fill))) +
+#   scale_fill_viridis_c(option = "A") +
+#   coord_cartesian(expand = F) +
+#   ggpubr::theme_pubr(legend = "right") +
+#   theme(aspect.ratio = 1)
+```
+
+# Result
+
+```{r, fig.width=8, fig.height=6}
+results %>% 
+  mutate(PopulationSize = Juveniles + Females + Males) %>%
+  filter(Generation == 100) %>% 
+  mutate(Survived = as.numeric(PopulationSize != 0)) %>% 
+  ggplot(aes(HuntingPressure, Survived)) +
+  geom_bin2d(binwidth = c(5, 0.05)) +
+  stat_summary_bin() +
+  geom_smooth(method = "glm",
+              method.args = list(family = "binomial")) +
+  scale_fill_viridis_c(option = "A", direction = -1,
+                       guide = "none") +
+  scale_y_continuous(labels = scales::label_percent()) +
+  ggpubr::theme_pubr(legend = "right",
+                     base_family = "CMU Serif") +
+  coord_cartesian(expand = F) +
+  labs(x = "Hunting Pressure (Individuals)", y = "Probability of the population\nnot crashing within 100 generations") +
+  theme(
+    title = element_text(face = "bold")
+  )
+```
 
