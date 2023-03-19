@@ -1,0 +1,207 @@
+---
+title: "Bird Assignment"
+author: "Vildsvinene"
+output:
+  bookdown::pdf_document2:
+    toc: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warnings = FALSE, message = FALSE, dev = cairo_pdf)
+
+library(tidyverse)
+library(magrittr)
+library(googlesheets4)
+library(extrafont)
+library(rjson)
+
+library(sf)
+```
+
+
+
+```{r readData, fig.width=9, fig.height=8.4}
+translateAreaNames <- Vectorize(function(s) {
+  switch(s,
+         "s1" = "Sø 1",
+         "s2" = "Sø 2",
+         "ø1" = "Ø",
+         "g1" = "Græsareal 1",
+         "g2" = "Græsareal 2",
+         "b1" = "Bred 1",
+         "b2" = "Bred 2",
+         "h1" = "Fodringshjørne")
+})
+
+scrapeWeather <- function(longitude, latitude, datetime) {
+  paste0("https://api.weather.com/v1/geocode/", 
+         longitude,
+         "/",
+         latitude,
+         "/observations/historical.json?apiKey=",
+         "e1f10a1e78da46f5b10a1e78da96f525", # An API key can be put here 
+         "&units=m&startDate=",
+         strftime(datetime[1], "%Y%m%d"),
+         "&endDate=",
+         strftime(datetime[2], "%Y%m%d")) %>%
+    {fromJSON(file = .)} %$%
+    observations
+}
+
+bird_areas <- read_sf("data/done.gpkg") %>% 
+  select(!path) %>% 
+  mutate(`Area name` = paste0(str_extract(layer, "."), str_extract(layer, "[:digit:]")) %>% 
+           str_replace("NA", "1"))
+
+bird_sheet <- read_sheet("https://docs.google.com/spreadsheets/d/1YPTIY8i6wto2XADVJ9ddsCgcnI9RV4IElvVq8tZhRjg/edit#gid=0",
+                         sheet = "Ark1",
+                         range = "A1:I1008") %>% 
+  filter(rowSums(across(everything(), ~!is.na(.x))) > 0)
+
+censusTimes <- sort(unique(bird_sheet$`Time / date`))
+centroid <- bird_areas %>% 
+  summarize %>% 
+  st_centroid %>% 
+  st_transform(st_crs(4326)) %>% 
+  st_coordinates() %>% 
+  as.vector
+
+weather <- scrapeWeather(centroid[2], centroid[1], censusTimes %>% range) %>% 
+  reduce(bind_rows)
+```
+
+```{r}
+bird_area_usage <- bird_sheet %>% 
+  mutate(
+    `Area name` = `Area name` %>% 
+      translateAreaNames()
+  ) %>% 
+  pivot_longer(`Interacting humans`:`Grønbenet rørhøne`, names_to = "Species", values_to = "count") %>%
+  mutate(Species = snakecase::to_title_case(Species)) %>% 
+  group_by(`Area name`, Species) %>% 
+  summarize(
+    count = mean(count, na.rm = T),
+    .groups = "drop"
+  ) %>% 
+  left_join(bird_areas, by = c("Area name" = "layer")) %>% 
+  st_set_geometry(.$geom) %>% 
+  mutate(area = st_area(.)) %>% 
+  group_by(Species) %>% 
+  mutate(count = (count/sum(count))/as.numeric(area/sum(area)))
+
+
+AverageSpeciesAreaUsage <- bird_area_usage %>% 
+  ggplot(aes(`Area name`, Species, fill = count)) +
+  geom_tile(aes(color = after_scale(fill))) +
+  scale_fill_viridis_c(
+    #limits = c(0.01, 0.99),
+    # breaks = c(0.01, 0.1, 0.99),#c(0.01, 0.1, 0.5, 0.9, 0.99),
+    option = "A",
+    trans = "log10",#
+    na.value = "black"
+    # labels = scales::label_percent()
+  ) +
+  scale_y_discrete(labels = ~str_replace_all(., " ", "\n")) +
+  coord_cartesian(expand = F) +
+  labs(x = NULL, y = NULL, fill = "% Observations\nin\nArea for Species") +
+  ggpubr::theme_pubr(base_family = "CMU Serif",
+                     legend = "top") +
+  theme(aspect.ratio = 1,
+        title = element_text(size = 16),
+        axis.text.y = element_text(hjust = .5,
+                                   margin = margin(
+                                     r = 1, unit = "lines"
+                                   )),
+        axis.text.x = element_text(angle = 45,
+                                   hjust = 1),
+        legend.title = element_text(hjust = .5, vjust = 5,
+                                    face = "bold"),
+        legend.key.width = unit(6.045, "lines"),
+        legend.key.height = unit(1.5, "lines"),
+        legend.margin = margin(t = 1, l = -9.7, b = -1.3, unit = "lines"),
+        plot.margin = margin(2, -2, 1, 2, "lines"))
+
+ggsave("AverageSpeciesAreaUsage.pdf", AverageSpeciesAreaUsage,
+       device = cairo_pdf,
+       width = 8.5, height = 8.4,
+       antialias = "subpixel")
+```
+
+```{r}
+library(lubridate)
+
+ddms <- function(x) yday(x) + hour(x) / 24 + minute(x) / (24 * 60)
+
+combined_weather_and_obs <- weather %>% 
+  mutate(across(contains("time_gmt"), lubridate::as_datetime),
+         distance = sapply(valid_time_gmt, function(x) {
+           tD <- abs(ddms(censusTimes) +  - ddms(x))
+           w <- which.min(tD)
+           
+           c(w, tD[w])
+           }) %>% 
+           t %>% 
+           as_tibble %>% 
+           set_colnames(c("closestTime", "distanceToClosestTime"))) %>% 
+  unnest(distance) %>% 
+  group_by(closestTime) %>% 
+  filter(distanceToClosestTime < 1/24) %>% 
+  select(closestTime, temp, wx_phrase, clds, wdir_cardinal, wspd, pressure) %>% 
+  summarize(across(where(is.numeric), mean),
+            across(where(~!is.numeric(.)), ~names(which.max(table(.x))))) %>%
+  left_join(bird_sheet %>% 
+              mutate(time = as.numeric(factor(as.numeric(`Time / date`), levels = sort(unique(`Time / date`))))),
+            by = c("closestTime" = "time")) %>% 
+  left_join(bird_areas, "Area name") %>% 
+  st_set_geometry(.$geom)
+
+cloud_dict <- c("BKN" = "Broken",
+                "CLR" = "Clear",
+                "SKC" = "Clear",
+                "FEW" = "FEW",
+                "SCT" = "Scattered",
+                "OVC" = "Overcast",
+                "VV" = "Vertical Visibility")
+
+wdir_dict <- c("W" = "West",
+               "w" = "West",
+               "E" = "East",
+               "e" = "East",
+               "N" = "North",
+               "n" = "North",
+               "S" = "South",
+               "s" = "South")
+
+person_dict <- c("A" = "Asger",
+                 "L" = "Lærke",
+                 "M" = "Mads",
+                 "T" = "Terese")
+
+
+combined_weather_and_obs <- combined_weather_and_obs %>% 
+  mutate(
+    Clouds = cloud_dict[clds],
+    `Wind direction` = map_chr(wdir_cardinal, function(x) {
+      if (x == "CALM") return("CALM")
+      
+      paste0(wdir_dict[unlist(str_split(x, ""))], collapse = "-")
+    }),
+    `Area name` = translateAreaNames(`Area name`),
+    Person = map_chr(Person, function(x) {
+      paste0(person_dict[unlist(str_split(x, "[^[:alpha:]]+"))], collapse = ", ")
+    })
+  ) %>% 
+  select(!c(clds, wdir_cardinal, layer)) %>% 
+  rename("Wind speed" = "wspd", "Weather" = "wx_phrase", "Temperature" = "temp", "Census round" = "closestTime")
+
+
+combined_weather_and_obs %>% 
+  janitor::clean_names() %>% 
+  mutate(time_date = strftime(time_date, "%Y-%m-%d %H:%M:%S")) %>% 
+  write_sf("combined_weather_and_observations.shp")
+
+combined_weather_and_obs %>% 
+  st_drop_geometry() %>% 
+  write_csv2("combined_weather_and_observations.csv")
+```
+

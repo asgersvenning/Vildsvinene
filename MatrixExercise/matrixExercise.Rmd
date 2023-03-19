@@ -1,10 +1,8 @@
 ---
-title: "Matrix Modelling Exercise"
+title: "Exercise"
 author: "Vildsvinegruppen"
 date: "`r Sys.Date()`"
-output: 
-  bookdown::pdf_document2:
-    toc: false
+output: pdf_document
 ---
 
 ```{r setup, include=FALSE}
@@ -48,41 +46,12 @@ SurvivalJuveniles <- list(distribution = "Beta", parameters = c(1.92, 1.54))
 SurvivalMale <- list(distribution = "Beta", parameters = c(2.82, 1.55))
 ```
 
-```{r}
-oldPar <- par(mfrow = c(2, 3))
-
-Fecundity %>% 
-  sampleFromDist(100000) %>% 
-  hist(100, main = "Fecundity")
-
-SexRatio %>% 
-  sampleFromDist(100000) %>% 
-  hist(100, main = "Sex Ratio")
-
-SurvivalJuveniles %>% 
-  sampleFromDist(100000) %>% 
-  hist(100, main = "Survival Juvenile")
-
-SurvivalFemale %>% 
-  sampleFromDist(100000) %>% 
-  hist(100, main = "Survival Female")
-
-SurvivalMale %>% 
-  sampleFromDist(100000) %>% 
-  hist(100, main = "Survival Male")
-
-par(oldPar)
-```
-
-
-\newpage
-
 # Population Transition Matrix
 
 Formulas from article (REF):
 
 ```{r, echo = T}
-constructMatrix <- function(Pop, Fec, SR, Sj, Sf, Sm, K) {
+constructMatrix <- function(Pop, Fec, SR, Sj, Sf, Sm, K, h) {
   ## Pop: Population structure after removal
   ## Fec: Fecundity
   ## SR : Sex Ratio
@@ -108,16 +77,20 @@ constructMatrix <- function(Pop, Fec, SR, Sj, Sf, Sm, K) {
   # Adult male survival
   TM[3, 3] <- Sm
   
-  TM
+  if (!missing(h)) {
+    TM - matrix(rep(h, 3), ncol = 3)
+  } 
+  else {
+    TM
+  }
 }
 ```
 
-\newpage
 
 # Simulation loop
 
 ```{r, echo = T}
-results <- lapply(rep(seq(10, 100, 5), each = 10), function(R) {
+results <- lapply(rep(seq(10, 100, 5), each = 100), function(R) {
   phenologyParameters <- list(
     Fec = Fecundity %>% 
       sampleFromDist,
@@ -127,8 +100,9 @@ results <- lapply(rep(seq(10, 100, 5), each = 10), function(R) {
       sampleFromDist,
     Sm = SurvivalMale %>% 
       sampleFromDist,
-    Sj = SurvivalJuveniles %>% 
-      sampleFromDist, #0.364
+    Sj = 0.364#SurvivalJuveniles %>% 
+    #sampleFromDist,
+    ,
     K = 4*800,
     Pop = c(50, 70, 30)
   )
@@ -197,13 +171,12 @@ results <- lapply(rep(seq(10, 100, 5), each = 10), function(R) {
 # Result
 
 ```{r, fig.width=8, fig.height=6}
-results %>% 
+stochasticHuntingPressure <- results %>% 
   mutate(PopulationSize = Juveniles + Females + Males) %>%
   filter(Generation == 100) %>% 
   mutate(Survived = as.numeric(PopulationSize != 0)) %>% 
   ggplot(aes(HuntingPressure, Survived)) +
   geom_bin2d(binwidth = c(5, 0.05)) +
-  stat_summary_bin() +
   geom_smooth(method = "glm",
               method.args = list(family = "binomial")) +
   scale_fill_viridis_c(option = "A", direction = -1,
@@ -214,7 +187,98 @@ results %>%
   coord_cartesian(expand = F) +
   labs(x = "Hunting Pressure (Individuals)", y = "Probability of the population\nnot crashing within 100 generations") +
   theme(
-    title = element_text(face = "bold")
+    title = element_text(face = "plain",
+                         size = 16),
+    axis.title.x = element_text(
+      margin = margin(1, unit = "lines")
+    )
   )
+
+ggsave("stochasticHuntingPressure.png", stochasticHuntingPressure,
+       device = cairo_pdf,
+       width = 4, height = 3, scale = 2.5)
 ```
 
+
+
+```{r}
+sampleParam <- function(Pop = c(50, 70, 30), K = 4*800, h = c(0, 0, 0)) {
+  list(
+    Fec = Fecundity %>% 
+      sampleFromDist,
+    SR = SexRatio %>% 
+      sampleFromDist,
+    Sf = SurvivalFemale %>% 
+      sampleFromDist,
+    Sm = SurvivalMale %>% 
+      sampleFromDist,
+    Sj = 0.364#SurvivalJuveniles %>% 
+    #sampleFromDist,
+    ,
+    Pop = Pop,
+    K = K,
+    h = h
+  )
+}
+
+calcLambda <- function(param) {
+  do.call(constructMatrix, param) %>% 
+    eigen() %$%
+    values %>% 
+    first %>% 
+    Re
+}
+
+growthRateHuntingPressure_DF <- tibble(h = rep(seq(0, 1, 0.005), each = 3)) %>%
+  mutate(stage = rep(c("J", "F", "M"), 1 + 1/0.005) %>% 
+           factor(levels = c("J", "F", "M"))) %>% 
+  mutate(
+    lambda = map2(h, stage, function(x, y) {
+      
+      hS <- c(0,0,0)
+      if (y == "J") hS[1] <- x
+      if (y == "F") hS[2] <- x
+      if (y == "M") hS[3] <- x
+      
+      sapply(1:100, function(DUMMY) sampleParam(h = hS) %>% 
+               calcLambda())
+    }) 
+  )
+
+AnalyticGrowthRate <- growthRateHuntingPressure_DF %>% 
+  unnest(lambda) %>%
+  ggplot(aes(h, lambda, fill = stage)) +
+  # geom_smooth() +
+  stat_summary_bin(aes(color = after_scale(fill)),
+                   fun.data = ~tibble(ymin = quantile(., 0.25), y = median(.), ymax = quantile(., 0.75)),
+                   geom = "line",
+                   linewidth = 1,
+                   binwidth = 0.01) +
+  stat_summary_bin(aes(color = after_scale(fill)),
+                   fun.data = ~tibble(ymin = quantile(., 0.25), y = median(.), ymax = quantile(., 0.75)),
+                   geom = "ribbon",
+                   alpha = 0.5,
+                   linewidth = 0.75,
+                   binwidth = 0.01) +
+  geom_hline(yintercept = 1, color = "firebrick", linewidth = 1.25) +
+  scale_fill_brewer(palette = "Dark2",
+                    labels = ~sapply(., function(x) switch(x, "J" = "Juvenile", "F" = "Female", "M" = "Male"))) +
+  scale_x_continuous(labels = scales::label_percent()) +
+  ggpubr::theme_pubr(base_family = "CMU Serif", legend = "right") +
+  labs(x = "% Individuals culled per generation", y = latex2exp::TeX("Growth rate $(\\lambda)$"), fill = "Lifestage") +
+  coord_cartesian(xlim = c(0, 1), expand = F) +
+  theme(title = element_text(face = "plain",
+                             size = 16),
+        axis.title.x = element_text(
+          margin = margin(1, unit = "lines")
+        ),
+        legend.position = c(0.2, 0.3),
+        legend.background = element_rect(color = "gray35",
+                                         linewidth = .75)
+  )
+
+
+ggsave("AnalyticGrowthRate.pdf", AnalyticGrowthRate,
+     device = cairo_pdf,
+     width = 4, height = 3, scale = 2)
+```
