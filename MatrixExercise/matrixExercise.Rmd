@@ -27,16 +27,21 @@ sampleFromDist <- function(D, n = 1) {
   }
 }
 
+calcLambda <- function(param) {
+  do.call(constructMatrix, param) %>% 
+    eigen() %$%
+    values %>% 
+    first %>% 
+    Re
+}
 ```
 
 # Question
 
 How large is the maximal sustainable hunting pressure on wild boars in Tofte Skov?
 
-
-# Phenology Parameters
-
-From article (REF):
+## Phenology Parameters
+We use the phenological parameters from the \cite{Croft2020}:
 
 ```{r, echo = T}
 Fecundity <- list(distribution = "Gamma", parameters = c(47.4, 8.66))
@@ -46,9 +51,27 @@ SurvivalJuveniles <- list(distribution = "Beta", parameters = c(1.92, 1.54))
 SurvivalMale <- list(distribution = "Beta", parameters = c(2.82, 1.55))
 ```
 
-# Population Transition Matrix
+## Population Transition Matrix
 
-Formulas from article (REF):
+As well as the transition matrix formulation:
+
+$$\mathbf{A}_t = \begin{bmatrix}
+0 & s_2 F_t & 0 \\
+s_1 m & s_2 & 0 \\
+s_1 (1 - m) & 0 & s_2
+\end{bmatrix}$$
+where $s_1, s_2, s_3$ are juvenile, female \& male survival rates respectively, while $m$ is the sex-ratio and $F_t$ is the fecundity at time $t$. If fecundity is density dependent (as in \cite{Croft2020}) then:
+
+$$F_t = f_0 e^{\frac{-\sum(\mathbf{n}-\mathbf{r})_t}{k}}$$
+otherwise:
+$$F_t = f_0$$
+We also adapt the formulation of stochastic growth as \cite{Croft2020}:
+
+$$\log(\mathbf{n}_{t+1}) \sim N\left(\log\left(\mathbf{A}_t(\mathbf{n}-\mathbf{r})_t\right),\sigma_i^2\right)$$
+
+Where the cohort stratified population size is sampled from an essentially quasi-poisson distribution.
+
+The code for constructing the matrix:
 
 ```{r, echo = T}
 constructMatrix <- function(Pop, Fec, SR, Sj, Sf, Sm, K, h) {
@@ -59,6 +82,7 @@ constructMatrix <- function(Pop, Fec, SR, Sj, Sf, Sm, K, h) {
   ## Sf : Survival female
   ## Sm : survival male
   ## K  : Carrying capacity
+  ## h  ; hunting pressure
   
   TM <- matrix(0, nrow = 3, ncol = 3)
   
@@ -84,126 +108,7 @@ constructMatrix <- function(Pop, Fec, SR, Sj, Sf, Sm, K, h) {
     TM
   }
 }
-```
 
-
-# Simulation loop
-
-```{r, echo = T}
-results <- lapply(rep(seq(10, 100, 5), each = 100), function(R) {
-  phenologyParameters <- list(
-    Fec = Fecundity %>% 
-      sampleFromDist,
-    SR = SexRatio %>% 
-      sampleFromDist,
-    Sf = SurvivalFemale %>% 
-      sampleFromDist,
-    Sm = SurvivalMale %>% 
-      sampleFromDist,
-    Sj = 0.364#SurvivalJuveniles %>% 
-    #sampleFromDist,
-    ,
-    K = 4*800,
-    Pop = c(50, 70, 30)
-  )
-  
-  populationHistory <- matrix(ncol = 3, nrow = 0)
-  
-  
-  for (i in seq(100)) {
-    
-    phenologyParameters$Pop <- phenologyParameters$Pop -
-      as.vector(table(factor(sample.int(3, R, T), levels = c("1", "2", "3"))))
-    
-    PopMatrix <- do.call(constructMatrix, phenologyParameters)
-    
-    phenologyParameters$Pop <- as.vector(PopMatrix %*% phenologyParameters$Pop) 
-    
-    phenologyParameters$Pop[phenologyParameters$Pop < 0] <- 0
-    
-    
-    populationHistory <- rbind(populationHistory, phenologyParameters$Pop)
-    
-  }
-  
-  populationHistory %>% 
-    set_colnames(c("Juveniles", "Females", "Males")) %>% 
-    as_tibble() %>% 
-    mutate(
-      Generation = row_number(),
-      HuntingPressure = R
-    )
-}) %>% 
-  bind_rows()  
-```
-
-
-```{r}
-# results %>% 
-#   pivot_longer(c(Juveniles, Females, Males), names_to = "Stage", values_to = "Individuals") %>% 
-#   ggplot(aes(Generation, Individuals, color = Stage, group = paste0(Stage, Simulation))) +
-#   geom_line(alpha = 0.1,
-#             key_glyph = draw_key_point) +
-#   stat_summary_bin(aes(group = Stage),
-#                    binwidth = 5,
-#                    fun.data = median_hilow) +
-#   guides(color = guide_legend(override.aes = list(alpha = 1,
-#                                                   size = 2,
-#                                                   shape = 16))) +
-#   facet_wrap(~Stage, ncol = 1) +
-#   ggpubr::theme_pubr() +
-#   theme(aspect.ratio = 0.5)
-
-
-# results %>% 
-#   mutate(PopulationSize = Juveniles + Females + Males) %>% 
-#   # filter(Generation > 50) %>%
-#   ggplot(aes(HuntingPressure, PopulationSize, z = Generation)) +
-#   stat_summary_2d(binwidth = c(5, 50)) +
-#   # scale_color_viridis_c() +
-#   # geom_hex(aes(color = after_scale(fill))) +
-#   scale_fill_viridis_c(option = "A") +
-#   coord_cartesian(expand = F) +
-#   ggpubr::theme_pubr(legend = "right") +
-#   theme(aspect.ratio = 1)
-```
-
-# Result
-
-```{r, fig.width=8, fig.height=6}
-stochasticHuntingPressure <- results %>% 
-  mutate(PopulationSize = Juveniles + Females + Males) %>%
-  filter(Generation == 100) %>% 
-  mutate(Survived = as.numeric(PopulationSize != 0)) %>% 
-  ggplot(aes(HuntingPressure, Survived)) +
-  geom_bin2d(binwidth = c(5, 0.05)) +
-  geom_smooth(method = "glm",
-              method.args = list(family = "binomial")) +
-  scale_fill_viridis_c(option = "A", direction = -1,
-                       guide = "none") +
-  scale_y_continuous(labels = scales::label_percent()) +
-  ggpubr::theme_pubr(legend = "right",
-                     base_family = "CMU Serif") +
-  coord_cartesian(expand = F) +
-  labs(x = "Hunting Pressure (Individuals)", y = "Probability of the population\nnot crashing within 100 generations") +
-  theme(
-    title = element_text(face = "plain",
-                         size = 16),
-    axis.title.x = element_text(
-      margin = margin(1, unit = "lines")
-    )
-  )
-
-ggsave("stochasticHuntingPressure.pdf", stochasticHuntingPressure,
-       device = cairo_pdf,
-       width = 4, height = 3, scale = 2.5)
-```
-
-\begin{figure}
-\includegraphics[width=\textwidth]{stochasticHuntingPressure.pdf}
-\end{figure}
-
-```{r}
 sampleParam <- function(Pop = c(50, 70, 30), K = 4*800, h = c(0, 0, 0)) {
   list(
     Fec = Fecundity %>% 
@@ -222,79 +127,11 @@ sampleParam <- function(Pop = c(50, 70, 30), K = 4*800, h = c(0, 0, 0)) {
     h = h
   )
 }
-
-calcLambda <- function(param) {
-  do.call(constructMatrix, param) %>% 
-    eigen() %$%
-    values %>% 
-    first %>% 
-    Re
-}
-
-growthRateHuntingPressure_DF <- tibble(h = rep(seq(0, 1, 0.005), each = 3)) %>%
-  mutate(stage = rep(c("J", "F", "M"), 1 + 1/0.005) %>% 
-           factor(levels = c("J", "F", "M"))) %>% 
-  mutate(
-    lambda = map2(h, stage, function(x, y) {
-      
-      hS <- c(0,0,0)
-      if (y == "J") hS[1] <- x
-      if (y == "F") hS[2] <- x
-      if (y == "M") hS[3] <- x
-      
-      sapply(1:100, function(DUMMY) sampleParam(h = hS) %>% 
-               calcLambda())
-    }) 
-  )
-
-AnalyticGrowthRate <- growthRateHuntingPressure_DF %>% 
-  unnest(lambda) %>%
-  ggplot(aes(h, lambda, fill = stage)) +
-  # geom_smooth() +
-  stat_summary_bin(aes(color = after_scale(fill)),
-                   fun.data = ~tibble(ymin = quantile(., 0.25), y = median(.), ymax = quantile(., 0.75)),
-                   geom = "line",
-                   linewidth = 1,
-                   binwidth = 0.01) +
-  stat_summary_bin(aes(color = after_scale(fill)),
-                   fun.data = ~tibble(ymin = quantile(., 0.25), y = median(.), ymax = quantile(., 0.75)),
-                   geom = "ribbon",
-                   alpha = 0.5,
-                   linewidth = 0.75,
-                   binwidth = 0.01) +
-  geom_hline(yintercept = 1, color = "firebrick", linewidth = 1.25) +
-  scale_fill_brewer(palette = "Dark2",
-                    labels = ~sapply(., function(x) switch(x, "J" = "Juvenile", "F" = "Female", "M" = "Male"))) +
-  scale_x_continuous(labels = scales::label_percent()) +
-  ggpubr::theme_pubr(base_family = "CMU Serif", legend = "right") +
-  labs(x = "% Individuals culled per generation", y = latex2exp::TeX("Growth rate $(\\lambda)$"), fill = "Lifestage") +
-  coord_cartesian(xlim = c(0, 1), expand = F) +
-  theme(title = element_text(face = "plain",
-                             size = 16),
-        axis.title.x = element_text(
-          margin = margin(1, unit = "lines")
-        ),
-        legend.position = c(0.2, 0.3),
-        legend.background = element_rect(color = "gray35",
-                                         linewidth = .75)
-  )
-
-
-ggsave("AnalyticGrowthRate.pdf", AnalyticGrowthRate,
-       device = cairo_pdf,
-       width = 4, height = 3, scale = 2)
 ```
 
-\begin{figure}
-\includegraphics[width=\textwidth]{AnalyticGrowthRate.pdf}
-\end{figure}
+# Non-Stochastic Growth
 
-```{r}
-colorspace::hcl_palettes(type = "diverging", plot = T)
-```
-
-
-```{r}
+```{r, echo = F}
 library(furrr)
 library(colorspace)
 library(metR)
@@ -380,5 +217,13 @@ juvenileFemaleHuntingPlt <- juvenileFemaleHunting %>%
 
 ggsave("juvenileFemaleHuntingPressure.pdf", juvenileFemaleHuntingPlt,
        device = cairo_pdf, width = 4, height = 3, scale = 2)
+```
+
+
+```{r, echo = F}
+library(popbio)
+
+
+sampleParam()
 ```
 

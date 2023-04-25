@@ -1,0 +1,295 @@
+# Simulation loop
+
+```{r, echo = T}
+results <- lapply(rep(seq(10, 100, 5), each = 100), function(R) {
+  phenologyParameters <- list(
+    Fec = Fecundity %>% 
+      sampleFromDist,
+    SR = SexRatio %>% 
+      sampleFromDist,
+    Sf = SurvivalFemale %>% 
+      sampleFromDist,
+    Sm = SurvivalMale %>% 
+      sampleFromDist,
+    Sj = 0.364#SurvivalJuveniles %>% 
+    #sampleFromDist,
+    ,
+    K = 4*800,
+    Pop = c(50, 70, 30)
+  )
+  
+  populationHistory <- matrix(ncol = 3, nrow = 0)
+  
+  
+  for (i in seq(100)) {
+    
+    phenologyParameters$Pop <- phenologyParameters$Pop -
+      as.vector(table(factor(sample.int(3, R, T), levels = c("1", "2", "3"))))
+    
+    PopMatrix <- do.call(constructMatrix, phenologyParameters)
+    
+    phenologyParameters$Pop <- as.vector(PopMatrix %*% phenologyParameters$Pop) 
+    
+    phenologyParameters$Pop[phenologyParameters$Pop < 0] <- 0
+    
+    
+    populationHistory <- rbind(populationHistory, phenologyParameters$Pop)
+    
+  }
+  
+  populationHistory %>% 
+    set_colnames(c("Juveniles", "Females", "Males")) %>% 
+    as_tibble() %>% 
+    mutate(
+      Generation = row_number(),
+      HuntingPressure = R
+    )
+}) %>% 
+  bind_rows()  
+```
+
+
+```{r}
+# results %>% 
+#   pivot_longer(c(Juveniles, Females, Males), names_to = "Stage", values_to = "Individuals") %>% 
+#   ggplot(aes(Generation, Individuals, color = Stage, group = paste0(Stage, Simulation))) +
+#   geom_line(alpha = 0.1,
+#             key_glyph = draw_key_point) +
+#   stat_summary_bin(aes(group = Stage),
+#                    binwidth = 5,
+#                    fun.data = median_hilow) +
+#   guides(color = guide_legend(override.aes = list(alpha = 1,
+#                                                   size = 2,
+#                                                   shape = 16))) +
+#   facet_wrap(~Stage, ncol = 1) +
+#   ggpubr::theme_pubr() +
+#   theme(aspect.ratio = 0.5)
+
+
+# results %>% 
+#   mutate(PopulationSize = Juveniles + Females + Males) %>% 
+#   # filter(Generation > 50) %>%
+#   ggplot(aes(HuntingPressure, PopulationSize, z = Generation)) +
+#   stat_summary_2d(binwidth = c(5, 50)) +
+#   # scale_color_viridis_c() +
+#   # geom_hex(aes(color = after_scale(fill))) +
+#   scale_fill_viridis_c(option = "A") +
+#   coord_cartesian(expand = F) +
+#   ggpubr::theme_pubr(legend = "right") +
+#   theme(aspect.ratio = 1)
+```
+
+# Result
+
+```{r, fig.width=8, fig.height=6}
+stochasticHuntingPressure <- results %>% 
+  mutate(PopulationSize = Juveniles + Females + Males) %>%
+  filter(Generation == 100) %>% 
+  mutate(Survived = as.numeric(PopulationSize != 0)) %>% 
+  ggplot(aes(HuntingPressure, Survived)) +
+  geom_bin2d(binwidth = c(5, 0.05)) +
+  geom_smooth(method = "glm",
+              method.args = list(family = "binomial")) +
+  scale_fill_viridis_c(option = "A", direction = -1,
+                       guide = "none") +
+  scale_y_continuous(labels = scales::label_percent()) +
+  ggpubr::theme_pubr(legend = "right",
+                     base_family = "CMU Serif") +
+  coord_cartesian(expand = F) +
+  labs(x = "Hunting Pressure (Individuals)", y = "Probability of the population\nnot crashing within 100 generations") +
+  theme(
+    title = element_text(face = "plain",
+                         size = 16),
+    axis.title.x = element_text(
+      margin = margin(1, unit = "lines")
+    )
+  )
+
+ggsave("stochasticHuntingPressure.pdf", stochasticHuntingPressure,
+       device = cairo_pdf,
+       width = 4, height = 3, scale = 2.5)
+```
+
+\begin{figure}
+\includegraphics[width=\textwidth]{stochasticHuntingPressure.pdf}
+\end{figure}
+
+```{r}
+sampleParam <- function(Pop = c(50, 70, 30), K = 4*800, h = c(0, 0, 0)) {
+  list(
+    Fec = Fecundity %>% 
+      sampleFromDist,
+    SR = SexRatio %>% 
+      sampleFromDist,
+    Sf = SurvivalFemale %>% 
+      sampleFromDist,
+    Sm = SurvivalMale %>% 
+      sampleFromDist,
+    Sj = 0.364#SurvivalJuveniles %>% 
+    #sampleFromDist,
+    ,
+    Pop = Pop,
+    K = K,
+    h = h
+  )
+}
+
+calcLambda <- function(param) {
+  do.call(constructMatrix, param) %>% 
+    eigen() %$%
+    values %>% 
+    first %>% 
+    Re
+}
+
+growthRateHuntingPressure_DF <- tibble(h = rep(seq(0, 1, 0.005), each = 3)) %>%
+  mutate(stage = rep(c("J", "F", "M"), 1 + 1/0.005) %>% 
+           factor(levels = c("J", "F", "M"))) %>% 
+  mutate(
+    lambda = map2(h, stage, function(x, y) {
+      
+      hS <- c(0,0,0)
+      if (y == "J") hS[1] <- x
+      if (y == "F") hS[2] <- x
+      if (y == "M") hS[3] <- x
+      
+      sapply(1:100, function(DUMMY) sampleParam(h = hS) %>% 
+               calcLambda())
+    }) 
+  )
+
+AnalyticGrowthRate <- growthRateHuntingPressure_DF %>% 
+  unnest(lambda) %>%
+  ggplot(aes(h, lambda, fill = stage)) +
+  # geom_smooth() +
+  stat_summary_bin(aes(color = after_scale(fill)),
+                   fun.data = ~tibble(ymin = quantile(., 0.25), y = median(.), ymax = quantile(., 0.75)),
+                   geom = "line",
+                   linewidth = 1,
+                   binwidth = 0.01) +
+  stat_summary_bin(aes(color = after_scale(fill)),
+                   fun.data = ~tibble(ymin = quantile(., 0.25), y = median(.), ymax = quantile(., 0.75)),
+                   geom = "ribbon",
+                   alpha = 0.5,
+                   linewidth = 0.75,
+                   binwidth = 0.01) +
+  geom_hline(yintercept = 1, color = "firebrick", linewidth = 1.25) +
+  scale_fill_brewer(palette = "Dark2",
+                    labels = ~sapply(., function(x) switch(x, "J" = "Juvenile", "F" = "Female", "M" = "Male"))) +
+  scale_x_continuous(labels = scales::label_percent()) +
+  ggpubr::theme_pubr(base_family = "CMU Serif", legend = "right") +
+  labs(x = "% Individuals culled per generation", y = latex2exp::TeX("Growth rate $(\\lambda)$"), fill = "Lifestage") +
+  coord_cartesian(xlim = c(0, 1), expand = F) +
+  theme(title = element_text(face = "plain",
+                             size = 16),
+        axis.title.x = element_text(
+          margin = margin(1, unit = "lines")
+        ),
+        legend.position = c(0.2, 0.3),
+        legend.background = element_rect(color = "gray35",
+                                         linewidth = .75)
+  )
+
+
+ggsave("AnalyticGrowthRate.pdf", AnalyticGrowthRate,
+       device = cairo_pdf,
+       width = 4, height = 3, scale = 2)
+```
+
+\begin{figure}
+\includegraphics[width=\textwidth]{AnalyticGrowthRate.pdf}
+\end{figure}
+
+```{r}
+colorspace::hcl_palettes(type = "diverging", plot = T)
+```
+
+
+```{r}
+library(furrr)
+library(colorspace)
+library(metR)
+library(geomtextpath)
+
+plan("multisession", workers = 8)
+juvenileFemaleHunting <- tibble(
+  f = seq(0, 0.2, length.out = 25),
+  j = seq(0, 0.5, length.out = 25)
+) %>% 
+  complete(f, j) %>% 
+  slice(rep(1:n(), 200)) %>% 
+  mutate(
+    lambda = future_map2_dbl(f,j, function(hF, hJ) {
+      sampleParam(h = c(hJ, hF, 0)) %>% 
+        calcLambda
+    })
+  )
+plan("sequential")
+
+tValueStat <- function(x) {
+  mod          <- lm(x ~ 1)
+  coefficients <- summary(mod)$coefficients[1, ]
+  
+  t.value      <- coefficients[3] %>% 
+    unname %>% 
+    unclass
+  
+  t.value
+}
+
+juvenileFemaleHuntingPlt <- juvenileFemaleHunting %>%
+  group_by(cut_width(f, 0.015, boundary = 0), cut_width(j, 0.04, boundary = 0)) %>%
+  summarize(across(!lambda, min),
+            lambda = mean(lambda),
+            .groups = "drop") %>%
+  ggplot(aes(j, f, z = lambda)) +
+  geom_contour_fill(breaks = seq(-2, 2, .1),
+                    aes(fill = after_stat(level_high),
+                        color = after_scale(fill))) +
+  geom_contour2(aes(label = after_stat(format(level, nsmall = 1))),
+                skip = 0,
+                label.placer = isoband::label_placer_manual(
+                  # This is just done because I for my OCD's sake;
+                  # I think it looks better when the contour labels are aligned
+                  breaks = rev(seq(.5, 1.1, .1)), # label values (i.e. what number should be displayed)
+                  x = c(rep(.075,5), 0.7, 0.875), # label x-coordinate (panel coordinates NOT data)
+                  y = c(0.085, 0.24, 0.375, 0.525, 0.807, 0.753, 0.753),  # label y-coordinate (panel coordinates NOT data)
+                  theta = rep(0, 7) # label text angle (0 = no rotation)
+                ),
+                family = "CMU Serif",
+                fontface = "bold",
+                margin = margin(2,2,2,2, "mm")) +
+  colorspace::scale_fill_continuous_diverging(palette = "Blue-Red 2", 
+                                              mid = 1,
+                                              rev = T,
+                                              breaks = seq(0.5, 1.2, .1)) +
+  scale_x_continuous(labels = scales::label_percent()) +
+  scale_y_continuous(labels = scales::label_percent()) +
+  coord_equal(expand = F) +
+  guides(fill = guide_colorbar(
+    ticks.colour = "black",
+    ticks.linewidth = .25,
+    frame.colour = "black",
+    frame.linewidth = .5,
+  )) +
+  ggpubr::theme_pubr(legend = "right", base_family = "CMU Serif") +
+  labs(x = "Juvenile Hunting Pressure", 
+       y = "Female Hunting Pressure", 
+       fill = latex2exp::TeX("Population\nGrowth Rate ($\\lambda$)")) + 
+  theme(title = element_text(face = "bold",
+                             size = 14),
+        axis.title.x = element_text(margin = margin(6,0,0,0,"mm")),
+        axis.title.y = element_text(margin = margin(0,4,0,0,"mm")),
+        legend.text = element_text(size = 12),
+        legend.title = element_text(margin = margin(0,0,0,-11,"mm"), # This margin is added to allow centering of the wide legend title
+                                    size = 18),
+        aspect.ratio = 1,
+        legend.box.margin = margin(0, 0, -5.7, 12, "mm"),            # \|/ Likewise
+        legend.key.height = unit(16, "mm"),
+        legend.key.width = unit(15, "mm"),
+        legend.box.spacing = unit(1, "mm"))
+
+ggsave("juvenileFemaleHuntingPressure.pdf", juvenileFemaleHuntingPlt,
+       device = cairo_pdf, width = 4, height = 3, scale = 2)
+```
+
