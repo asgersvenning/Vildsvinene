@@ -9,6 +9,8 @@ library(metR)
 library(RColorBrewer)
 library(pals)
 
+setwd("Final_project")
+
 land_code_dict <- read_file("classes_landuse") %>% 
   str_split("\n") %>% 
   unlist %>% 
@@ -88,6 +90,8 @@ tofte_landuse %>%
   coord_sf(expand = F) +
   theme(aspect.ratio = 1)
 
+tofte_landuse %>% 
+  write_csv2("tofte_landuse.csv")
 
 
   
