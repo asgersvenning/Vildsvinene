@@ -1,0 +1,34 @@
+110000 Building Buildings, which do not overlap with build-up categories
+121000 Low built up Areas with buildings up to two storeys
+121110 Low built up; Building Buildings located within low built-up areas
+122000 High built up Areas with buildings with more than two storeys
+122110 High built up; Building Buildings located within high built-up areas
+123000 City centre Areas with contiguous built-up areas in city centres
+123110 City centre; Building Buildings located within city centre
+124000 Other built up Other built-up areas, primarily technical areas from the topographical database
+124110 Other built up; Building Buildings located within other built-up areas
+125000 Industry/business Area with commercial or industrial use, such as industry and shopping malls
+125110 Industry/business; Building Buildings located within industry/business areas
+126000 Airport/runway Airports and airfields
+126110 Airport/runway; Building Buildings located within Airport/runway areas
+130000 Recreation area/sports ground Recreational areas and sport grounds. Includes allotment gardens
+130110 Recreation area/sports ground; Building Buildings located within recreational areas/sport grounds
+141000 Road, paved Paved roads
+142000 Road, not paved Not paved roads
+150000 Railway Railways and other areas related to railways
+150110 Railway; Building Buildings located within areas related to railways
+160000 Resource extraction Gravel pits
+211000 Agriculture, intensive, temporary crops Annual crops, including grassland in rotation
+212000 Agriculture, intensive, permanent crops Perennial crops, including Christmas trees, energy forest, orchards and nurseries/plantations
+220000 Agriculture, extensive Extensive land use, such as permanent grassland
+230000 Agriculture, not classified Field parcels or field blocks from the agricultural census data, which do not contain land use information
+311000 Forest Forested land
+312000 Forest, wet Forested land on wet ground
+321000 Nature, dry Habitat types on dry ground, which are not categorised as forest
+321220 Nature, dry; Agriculture, extensive Dry nature, which in the agricultural census data is categorised as extensive agriculture
+322000 Nature, wet Habitat types on wet ground, which are not categorised as forest
+322220 Nature, wet; Agriculture, extensive Wet nature, which in the agricultural census data is categorised as extensive agriculture
+411000 Lake Surface covered with freshwater, which is not part of a watercourse
+412000 Stream Surface covered with freshwater, which is part of a watercourse
+420000 Sea Surface covered with salt- or brackish water
+800000 Unmapped Area, where none of the applied input data contain land use/land cover information 
