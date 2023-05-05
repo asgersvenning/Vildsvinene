@@ -4,3 +4,6 @@
 .Ruserdata
 *.Rproj
 .secrets
+temp
+matrixExercise/*.tex
+*.log

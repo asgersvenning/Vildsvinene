@@ -1,8 +1,20 @@
 ---
-title: "Exercise"
-author: "Vildsvinegruppen"
-date: "`r Sys.Date()`"
-output: pdf_document
+title: "Sustainable Hunting of Wild Boar in Tofte Skov"
+subtitle: "Matrix Excercise - Assignment 3"
+author: |
+  | Mads Gammelgaard, Terese Bech Eriksen, 
+  | Lærke Thrane Mikkelsen & Asger Svenning
+date: "`r format(Sys.Date(), '%d. %B, %Y')`"
+output: 
+  bookdown::pdf_document2:
+    keep_tex: true
+    toc: true
+    number_sections: true
+    includes:
+      in_header: header.tex
+classoption: twoside
+bibliography: references.bib
+urlcolor: blue
 ---
 
 ```{r setup, include=FALSE}
@@ -27,52 +39,93 @@ sampleFromDist <- function(D, n = 1) {
   }
 }
 
-calcLambda <- function(param) {
-  do.call(constructMatrix, param) %>% 
-    eigen() %$%
-    values %>% 
-    first %>% 
-    Re
+plotDist <- function(D, q = c(0.001, 0.999), labs = "xy", dir = -1) {
+  dist <- tolower(D$distribution)
+  param <- D$parameters
+  # if (dist == "beta") q <- c(0, 1)
+  distRange <- eval(call(paste0("q", dist), q, param[1], param[2]))
+  distRange[1] <- floor(distRange[1] * 10) / 10
+  distRange[2] <- ceiling(distRange[2] * 10) / 10
+  
+  expected <- mean(eval(call(paste0("r", dist), 10000, param[1], param[2]))) #eval(call(paste0("q", dist), .5, param[1], param[2]))
+  
+  densRange <- range(eval(call(paste0("d", dist), seq(distRange[1], distRange[2], length.out = 500), param[1], param[2])))
+  
+  curve(eval(call(paste0("d", dist), quote(x), param[1], param[2])), xlim = distRange,
+        ylab = if (str_detect(labs, "y")) "density" else "", 
+        xlab = if (str_detect(labs, "x")) deparse1(substitute(D)) else "",
+        yaxs = "i",
+        font.lab = 2,
+        axes = F)
+  box(bty="l")
+  axis(1)
+  axis(2)
+  
+  
+  segments(x0 = expected, x1 = expected, y0 = densRange[1], y1 = densRange[2], col = "firebrick3", lty = 2)
+  text(
+    x = expected + dir * 0.07 * abs(diff(distRange)), 
+    y = densRange[1] + 0.025 * abs(diff(densRange)), 
+    labels = latex2exp::TeX(paste0("$E(", deparse1(substitute(D)), ") \\approx ", format(expected, nsmall = 1, digits = 2), "$")), 
+    srt = 90,
+    adj = c(0, .5),
+    font = 1
+  )
 }
 ```
 
-# Question
+\newpage
+# Introduction 
+In this assignment we investigate sustainable population harvesting of the wild boar, \textit{Sus scrofa}, population in Tofte Forest. Wild boars, both in and outside Tofte Forest, is hunted all year round. In this assignment we determine how large the annual hunting pressure of wild boar in Tofte Forest can be, while maintaining a stable/growing population. We use two models, one with non-stochastic growth rate and one with stochastic growth rate.
 
+## Research Question
 How large is the maximal sustainable hunting pressure on wild boars in Tofte Skov?
 
-## Phenology Parameters
-We use the phenological parameters from the \cite{Croft2020}:
-
+# Methods
+\subsection{Phenology Parameters} \label{sec:pheno}
+We use the phenological parameters from the [@Croft2020]:
 ```{r, echo = T}
-Fecundity <- list(distribution = "Gamma", parameters = c(47.4, 8.66))
-SexRatio <- list(distribution = "Beta", parameters = c(31.2, 29.2))
-SurvivalFemale <- list(distribution = "Beta", parameters = c(2.89, 1.46))
+Fecundity         <- list(distribution = "Gamma", parameters = c(47.4, 8.66))
+SexRatio          <- list(distribution = "Beta", parameters = c(31.2, 29.2))
+SurvivalFemale    <- list(distribution = "Beta", parameters = c(2.89, 1.46))
 SurvivalJuveniles <- list(distribution = "Beta", parameters = c(1.92, 1.54))
-SurvivalMale <- list(distribution = "Beta", parameters = c(2.82, 1.55))
+SurvivalMale      <- list(distribution = "Beta", parameters = c(2.82, 1.55))
+```
+```{r}
+cairo_pdf("paramDist.pdf", width = 8, height = 2, pointsize = 10)
+par(mfrow = c(1, 5), oma = c(0,1.25,.4,.4), mai = c(.4,.4,.1,.1), mar = c(4,2.6,0,0), xpd = NA, family = "CMU Serif")
+plotDist(Fecundity)
+plotDist(SexRatio, labs = "x")
+plotDist(SurvivalJuveniles, labs = "x")
+plotDist(SurvivalFemale, labs = "x", dir = 1)
+plotDist(SurvivalMale, labs = "x")
+dev.off()
 ```
 
+\begin{figure}
+\includegraphics[width=\textwidth]{paramDist.pdf}
+\vspace{-0.5cm}
+\caption{Phenology parameter distribution for \textit{S. scrofa} as supplied from (Croft et al. 2020), along with the expected value (mean) of each parameter.}
+\label{fig:param}
+\end{figure}
+
+While we estimate carrying capacity using the density estimated in [@Croft2020]; $100\;\mathrm{km}^{-1}$ and the area of Tofte Skov calculated as $\approx37.3\;\mathrm{km}^2$ using the shapefile provided by Rasmus Mohr:
+```{r, echo = T}
+CarryingCapacity <- 100 * 37 # = 3700
+```
+\newpage
 ## Population Transition Matrix
-
 As well as the transition matrix formulation:
-
 $$\mathbf{A}_t = \begin{bmatrix}
 0 & s_2 F_t & 0 \\
 s_1 m & s_2 & 0 \\
-s_1 (1 - m) & 0 & s_2
+s_1 (1 - m) & 0 & s_3
 \end{bmatrix}$$
-where $s_1, s_2, s_3$ are juvenile, female \& male survival rates respectively, while $m$ is the sex-ratio and $F_t$ is the fecundity at time $t$. If fecundity is density dependent (as in \cite{Croft2020}) then:
-
-$$F_t = f_0 e^{\frac{-\sum(\mathbf{n}-\mathbf{r})_t}{k}}$$
-otherwise:
-$$F_t = f_0$$
-We also adapt the formulation of stochastic growth as \cite{Croft2020}:
-
-$$\log(\mathbf{n}_{t+1}) \sim N\left(\log\left(\mathbf{A}_t(\mathbf{n}-\mathbf{r})_t\right),\sigma_i^2\right)$$
-
-Where the cohort stratified population size is sampled from an essentially quasi-poisson distribution.
+where $s_1, s_2, s_3$ are juvenile, female \& male survival rates respectively, while $m$ is the sex-ratio and $F_t$ is the fecundity at time $t$. If fecundity is density dependent (as in [@Croft2020]) then:
+$$F_t = f_0 e^{\frac{-\sum\mathrm{n}_t}{k}}$$
+where $\sum\mathbf{n}_t$ is the total population size at time $t$ and $k$ is the carrying capacity, while $f_0$ is the fecundity given no density dependence.
 
 The code for constructing the matrix:
-
 ```{r, echo = T}
 constructMatrix <- function(Pop, Fec, SR, Sj, Sf, Sm, K, h) {
   ## Pop: Population structure after removal
@@ -84,58 +137,54 @@ constructMatrix <- function(Pop, Fec, SR, Sj, Sf, Sm, K, h) {
   ## K  : Carrying capacity
   ## h  ; hunting pressure
   
+  # Initialize Leslie matrix with zeros
   TM <- matrix(0, nrow = 3, ncol = 3)
-  
   # Juveniles born
   TM[1, 2] <- Sf * Fec * exp(-sum(Pop)/K)
-  
   # Juveniles maturing to females
   TM[2, 1] <- Sj * SR
-  
   # Juveniles maturing to males
   TM[3, 1] <- Sj * (1 - SR)
-  
   # Adult female surval
   TM[2, 2] <- Sf
-  
   # Adult male survival
   TM[3, 3] <- Sm
   
-  if (!missing(h)) {
-    TM - matrix(rep(h, 3), ncol = 3)
-  } 
-  else {
-    TM
-  }
-}
-
-sampleParam <- function(Pop = c(50, 70, 30), K = 4*800, h = c(0, 0, 0)) {
-  list(
-    Fec = Fecundity %>% 
-      sampleFromDist,
-    SR = SexRatio %>% 
-      sampleFromDist,
-    Sf = SurvivalFemale %>% 
-      sampleFromDist,
-    Sm = SurvivalMale %>% 
-      sampleFromDist,
-    Sj = 0.364#SurvivalJuveniles %>% 
-    #sampleFromDist,
-    ,
-    Pop = Pop,
-    K = K,
-    h = h
-  )
+  # Subtract hunting pressure, if supplied, 
+  # and clamp lifestage transition probabilities to [0, +Inf[
+  matrix(pmax(0, TM - if (!missing(h)) matrix(rep(h, each = 3), ncol = 3) else 0), 3, 3)
 }
 ```
-
-# Non-Stochastic Growth
-
+```{r}
+sampleParam <- function(Pop = c(50, 70, 30), K = CarryingCapacity, h = c(0, 0, 0)) {
+  list(Fec = sampleFromDist(Fecundity),
+       SR  = sampleFromDist(SexRatio),
+       Sf  = sampleFromDist(SurvivalFemale),
+       Sm  = sampleFromDist(SurvivalMale),
+       Sj  = 0.364,
+       Pop = Pop,
+       K   = K,
+       h   = h)
+}
+```
+\newpage
+# Numeric Experiments \& Results
+## Deterministic Growth
+In this sub-assignment we show how using the instantaneous growth rate, estimated using the first eigenvalue of the Leslie matrix, can inform a management decision on what a sustainable cohort stratified hunting pressure is. 
 ```{r, echo = F}
 library(furrr)
 library(colorspace)
 library(metR)
 library(geomtextpath)
+library(geom)
+
+calcLambda <- function(param) {
+  do.call(constructMatrix, param) %>% 
+    eigen() %$%
+    values %>% 
+    first %>% 
+    Re
+}
 
 plan("multisession", workers = 8)
 juvenileFemaleHunting <- tibble(
@@ -178,8 +227,8 @@ juvenileFemaleHuntingPlt <- juvenileFemaleHunting %>%
                   # This is just done because I for my OCD's sake;
                   # I think it looks better when the contour labels are aligned
                   breaks = rev(seq(.5, 1.1, .1)), # label values (i.e. what number should be displayed)
-                  x = c(rep(.075,5), 0.7, 0.875), # label x-coordinate (panel coordinates NOT data)
-                  y = c(0.085, 0.24, 0.375, 0.525, 0.807, 0.753, 0.753),  # label y-coordinate (panel coordinates NOT data)
+                  x = c(rep(.075,5), 0.69, 0.85), # label x-coordinate (panel coordinates NOT data)
+                  y = c(0.086, 0.25, 0.38, 0.54, 0.8, 0.753, 0.753),  # label y-coordinate (panel coordinates NOT data)
                   theta = rep(0, 7) # label text angle (0 = no rotation)
                 ),
                 family = "CMU Serif",
@@ -188,7 +237,7 @@ juvenileFemaleHuntingPlt <- juvenileFemaleHunting %>%
   colorspace::scale_fill_continuous_diverging(palette = "Blue-Red 2", 
                                               mid = 1,
                                               rev = T,
-                                              breaks = seq(0.5, 1.2, .1)) +
+                                              breaks = seq(0.4, 1.2, .1)) +
   scale_x_continuous(labels = scales::label_percent()) +
   scale_y_continuous(labels = scales::label_percent()) +
   coord_equal(expand = F) +
@@ -218,12 +267,129 @@ juvenileFemaleHuntingPlt <- juvenileFemaleHunting %>%
 ggsave("juvenileFemaleHuntingPressure.pdf", juvenileFemaleHuntingPlt,
        device = cairo_pdf, width = 4, height = 3, scale = 2)
 ```
+\begin{figure}
+\includegraphics[width=\textwidth]{juvenileFemaleHuntingPressure.pdf}
+\caption{Relationship between population growth rate and annual hunting pressure (\%) for females and juveniles. Growth rate is calculated as the mean of 200 estimates with different random parameter draws, for each combination of hunting pressure at 25 different equally spaced values.}
+\label{fig:deterministicGrowth}
+\end{figure}
+We define a sustainable population as a population with a stable size, such that it can be maintained without translocation. In order to meet this management goal the population growth rate, lambda, should be approx. 1. In order to estimate the population growth rates we assume a population size in Tofte Forest of approx. 150 individuals.\footnote{For the purposes of this sub-assignment the population cohort stratification does not have any effect.} This can essentially be understood as a system without any influence of density dependence as:
+$$F_t = f_0 \cdot e^{\frac{-\sum\mathrm{n}_t}{k}}\approx f_0, \quad \mathrm{if}\quad \mathsmaller\sum\mathrm{n}_t \approx  0$$
 
+\fref{fig:deterministicGrowth} shows that to maintain a sustainable population the annual hunting pressure should be below 5% for females if only females are culled or below 32% for juveniles if only juveniles are culled. In between these two extremes a management plan can approx. trade 6 piglets for 1 adult female. This corresponds well with an expected fecundity of 5.5 given the parameters derived from [@Croft2020] (see \fref{fig:param}).
 
+## Stochastic Growth
+To investigate the effects of hunting on \textit{S. scrofa} in Tofte Skov assuming a stochastic growth rate, we have chosen to simplify the system slightly by using the maximum likelihood phenology parameters, in order to reduce the amount of free parameters and thus the computation and analytical complexity. Stochastic growth is modelled as a poisson process such that:
+$$\mathrm{E}(\Delta \mathrm{n}_t)=\mathbf{A_t}(\mathrm{n}_t - h) - (\mathrm{n}_t - h)$$
+$$\Delta \mathrm{n_t} \sim \mathrm{sign}\left(\mathrm{E}(\Delta \mathrm{n}_t)\right)\cdot\mathrm{Poisson}(|\mathrm{E}(\Delta \mathrm{n}_t)|)$$
+$$\mathrm{n}_{t+1}=(\mathrm{n}_t - h) + \Delta\mathrm{n}_t$$
+Where $n_t$ is the cohort stratified population size, $\mathbf{A}_t$ is the Leslie Matrix at generation $t$ and $h$ is the amount of individuals removed by hunting. At each generation the Leslie matrix is drawn from the specified distributions in \sref{sec:pheno} at each time step and hunting pressure is also modelled as a poisson process separately for each cohort:
+$$h \sim \mathrm{Poisson}(h^*)_{(3)}$$
+Where $h^*$ is expressed in individuals pr. cohort pr. generation. We use a starting population of 30 juveniles, 70 adult females and 50 adult males, somewhat arbitrarily, but based on the known population size of \textit{S. scrofa} of 150 in Tofte Skov.
 ```{r, echo = F}
-library(popbio)
+init  <- c(30, 70, 50)
 
+nextGen <- function(prev, r, A) {
+  n0 <- pmax(0, prev - rpois(3, r))
+  n1 <- A %*% n0
+  nd <- n1 - n0
+  pmax(0, n0 + sign(nd) * rpois(3, abs(nd)))
+}
 
-sampleParam()
+simNGen <- function(n, init, K, P, r) {
+  history <- numeric(n)
+  history[1] <- sum(init)
+  prev <- init
+  
+  for (i in 2:n) {
+    if (!is.finite(sum(prev))) stop(prev)
+    if (sum(prev) != 0) {
+      A        <- do.call(constructMatrix, sampleParam(prev, K))
+      prev     <- nextGen(prev, r, A)
+    }
+    history[i] <- sum(prev)
+  }
+  
+  history
+}
+
+stochasticResults <- tibble(
+  h = seq(0, 11, 1)
+) %>% 
+  slice(rep(1:n(), each = 100)) %>% 
+  mutate(
+    history = map(h, function(x) {
+      tibble(n = simNGen(100, init, CarryingCapacity, r = x)) %>%
+        mutate(generation = row_number())
+    },
+    .progress = T)
+  )
+
+expit <- function(x) exp(x) / (1 + exp(x))
+
+stochasticPlot <- stochasticResults %>% 
+  mutate(
+    grp = row_number() %>% 
+      factor
+  ) %>% 
+  unnest(history) %>%
+  mutate(
+    # n = Juveniles + Females + Males,
+    n = ifelse(is.na(n), 0, n)
+  ) %>%
+  ggplot(aes(generation, n)) +
+  geom_hline(yintercept = CarryingCapacity, linewidth = .75, color = "darkgoldenrod") +
+  geom_path(aes(group = grp), alpha = .15, linewidth = .2) +
+  stat_summary_bin(aes(group = factor(h)),
+                   binwidth = 5,
+                   geom = "path",
+                   fun = ~(1 - mean(. != 0, na.rm = T)) * log1p(10000),
+                   linewidth = .8,
+                   color = "firebrick") +
+  scale_y_continuous(
+    trans = "log1p",
+    breaks = c(0, 10, 100, 1000, 10000),
+    sec.axis = sec_axis(
+      trans = ~ .,
+      name  = "Probability of Population Collapse",
+      breaks = expm1(seq(log1p(0), log1p(10^4), length.out = 5)),
+      labels = scales::label_percent()(c(0, 0.25, 0.5, 0.75, 1))
+    )
+  ) +
+  scale_x_continuous(
+    sec.axis = sec_axis(
+      trans = ~.,
+      name  = latex2exp::TeX("Hunting pressure $(h^*)$"),
+      breaks = NULL,
+      labels = NULL
+    )
+  ) +
+  # scale_color_viridis_c(option = "D") +
+  facet_wrap(~h, nrow = 2) +
+  ggpubr::theme_pubr(base_family = "CMU Serif") +
+  coord_cartesian(expand = F, ylim = c(0, 10000)) +
+  labs(x = "Generation", y = "Total Population Size") +
+  theme(axis.title         = element_text(face = "bold",
+                                  size = 14),
+        axis.title.y.right = element_text(colour = "firebrick"),
+        axis.text.y.right  = element_text(colour = "firebrick"),
+        strip.text         = element_text(face = "bold",
+                                  size = 12),
+        strip.background   = element_blank(),
+        panel.spacing      = unit(5, "mm"),
+        plot.margin        = margin(0,.5,0,.5,"cm"))
+
+ggsave("stochasticGrowthHunting.pdf", stochasticPlot,
+       device = cairo_pdf,
+       width = 8, height = 4, scale = 1.25)
 ```
+\begin{figure}[htp]
+\includegraphics[width=\textwidth]{stochasticGrowthHunting.pdf}
+\caption{Population size evolution over 250 generations with varying hunting pressure, written in boldface over each panel, on \textit{S. scrofa}. Each combination of hunting pressure ($h^*$)is repeated 100 times as shown by the thin grey lines, while the solid red line shows the binned (width: 5 generations) proportion of collapsed populations. The carrying capacity is indicated by the horizontal brown line.}
+\label{fig:stochasticGrowth}
+\end{figure}
+As can be seen in \fref{fig:stochasticGrowth} the stochastic growth simulations shows that any hunting pressure of more than 4-5 individuals from each cohort will present a substantial risk (greater than 25\%) of population collapse at it's currently precarious size. However, the experiment suggests that this population collapse is unlikely to occur, if the population survives for about 25 generations, the population will probably stabilize just under the carrying capacity. This experiment does however inherently contain many hidden assumptions, most notably the simulations assume that the population utilizes the entire area uniformly, and that carrying capacity can be viewed as a single parameter. This neglects to take into account the spatial distribution of territory allocation and resource use/access, and likely leads to an inflated carrying capacity. However all population collapses in our experiment occur far below the carrying capacity, and our result is likely to hold even with much a lower carrying capacity.
 
+# Conclusion
+Using two different theoretical experiments, one deterministic and one stochastic, we show that the current population of wild boar, \textit{S. scrofa}, in Tofte Skov is unable to sustain any substantial hunting pressure without a considerable risk of population collapse. 
+
+# References
