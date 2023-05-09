@@ -94,3 +94,22 @@ landuse_hist <- landuse_int %>%
 ggsave("landuse_hist.png", landuse_hist,
        width = 6, height = 6, dpi = 400, scale = 2.5)
 
+
+pa_gps_plt <- landuse_int %>% 
+  filter(!in_fence) %>% 
+  group_by(type) %>% 
+  summarize(
+    Present = mean(n != 0),
+    Absent = 1 - Present) %>% 
+  pivot_longer(c(Present, Absent), names_to = "presence", values_to = "prop") %>% 
+  ggplot(aes(prop, type, fill = presence)) +
+  geom_col(position = "stack", color = "black") +
+  scale_x_continuous(expand = expansion(),
+                     labels = scales::label_percent()) +
+  scale_fill_brewer(palette = "Pastel1") +
+  labs(x = "Proportion of pixels", y = NULL, fill = "Presence\n/Absence",
+       title = "Presence/Absence of any\nGPS-fixes in different habitats")
+
+
+ggsave("pa_gps.pdf", pa_gps_plt,
+       device = cairo_pdf, width = 4, height = 3, dpi = 400, scale = 2.5)
