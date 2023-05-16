@@ -101,6 +101,7 @@ birds_weather_obs_data %>%
   kable("html", digits = 3) %>% 
   kable_paper(full_width = F) %>% 
   row_spec(0, bold = T, color = "black")
+  
 
 
 
