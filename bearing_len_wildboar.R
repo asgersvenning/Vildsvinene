@@ -1,7 +1,7 @@
 library(readr)
 library(tidyverse)
 library(geosphere)
-
+library(broom)
 
 
 Wildboar_gpstracks <- read_delim("data/Wildboar_gpstracks.csv", 
@@ -18,7 +18,7 @@ calculate_bearing <- function(lat1, lon1, lat2, lon2) {
 }
 
 
-Wildboar_gpstracks %>% 
+bearing_step_length_data <- Wildboar_gpstracks %>% 
   arrange(UniqueID) %>% 
   group_by(UniqueID) %>% 
   mutate(UTC_Date = as.Date(UTC_Date, format = "%d-%m-%Y")) %>% 
@@ -33,7 +33,33 @@ Wildboar_gpstracks %>%
     distance = distVincentySphere(cbind(Longitude, Latitude),
                                   cbind(lag(Longitude), lag(Latitude)))
   ) %>% 
-  mutate(distance_diff = abs(distance - lag(distance))) %>% 
-  filter(!(is.na(bearing))) %>% 
-  view
+  mutate(step_length = abs(distance - lag(distance)))
+
+## Creating a shared tibble of step_length and indivduals
+tracks_hab_class <- read_delim("Final_project/tracks_hab_class.csv", 
+                               delim = ";", escape_double = FALSE, trim_ws = TRUE)
+
+view(bearing_step_length_data)
+
+tracks_hab_class %>% 
+  arrange(UniqueID) %>% 
+  arrange(UTC_Date, UTC_Time) %>% 
+  mutate(direction_angle = bearing_step_length_data$bearing_diff,
+         step_len = bearing_step_length_data$step_length,
+         type = as.factor(type)) %>% 
+  na.omit() %>% 
+  select(c(type, step_len, direction_angle)) %>% 
+  filter(step_len < 10000) %>% 
+  #group_by(type) %>% 
+  #summarize(mean_step_len = mean(step_len),
+ #           mean_direction_angle = 180 - mean(direction_angle)) %>% 
+  ggplot(aes(x = step_len, y = type)) + 
+  geom_boxplot()
   
+  
+
+
+
+
+
+
