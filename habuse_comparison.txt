@@ -1,0 +1,48 @@
+\begin{table}
+\centering
+\begin{tabular}{>{\centering\arraybackslash}p{0cm}>{\raggedright\arraybackslash}p{4cm}>{\centering\arraybackslash}p{0.75cm}>{\centering\arraybackslash}p{0.75cm}>{\centering\arraybackslash}p{0.75cm}>{\centering\arraybackslash}p{0.75cm}>{\raggedleft\arraybackslash}p{2.5cm}}
+\toprule
+\multicolumn{1}{c}{\textbf{Habitat}} & \multicolumn{1}{c}{\textbf{Compared habitat}} & \multicolumn{1}{c}{$\mathbf{\mu}_\Delta$} & \multicolumn{1}{c}{$\mathbf{\mathrm{Q}_{50\%}}(\Delta)$} & \multicolumn{1}{c}{$\mathbf{\mathrm{Q}_{5\%}}(\Delta)$} & \multicolumn{1}{c}{$\mathbf{\mathrm{Q}_{95\%}}(\Delta)$} & \multicolumn{1}{c}{\textbf{\textsuperscript{*}P-value}}\\
+\midrule
+\addlinespace[0.3em]
+\multicolumn{7}{l}{\textbf{Agriculture, extensive}}\\
+\hspace{1em} & Agriculture, intensive & $\infty$ & $\infty$ & $5.2$ & $\infty$ & $5.5 \times 10^{-4}\;\star\star$\\
+\hspace{1em} & Artificial & $11.3$ & $10.7$ & $4.7$ & $19.8$ & $5.5 \times 10^{-4}\;\star\star$\\
+\hspace{1em} & Forest & $12.2$ & $11.8$ & $6.1$ & $19.7$ & $5.5 \times 10^{-4}\;\star\star$\\
+\hspace{1em} & Forest, wet & $22.0$ & $21.1$ & $11.0$ & $36.0$ & $5.5 \times 10^{-4}\;\star\star$\\
+\hspace{1em} & Lake & $49.0$ & $32.0$ & $13.8$ & $126.3$ & $5.5 \times 10^{-4}\;\star\star$\\
+\hspace{1em} & Missing & $16.9$ & $15.9$ & $8.0$ & $29.3$ & $5.5 \times 10^{-4}\;\star\star$\\
+\hspace{1em} & Nature, dry & $22.5$ & $21.7$ & $11.4$ & $36.6$ & $5.5 \times 10^{-4}\;\star\star$\\
+\hspace{1em} & Nature, wet & $159.5$ & $151.6$ & $85.2$ & $260.7$ & $5.5 \times 10^{-4}\;\star\star$\\
+\hspace{1em} & Road, not paved & $16.4$ & $15.1$ & $7.2$ & $30.2$ & $5.5 \times 10^{-4}\;\star\star$\\
+\hspace{1em} & Stream & $16.1$ & $15.1$ & $7.3$ & $28.5$ & $5.5 \times 10^{-4}\;\star\star$\\
+\addlinespace[0.3em]
+\multicolumn{7}{l}{\textbf{Artificial}}\\
+\hspace{1em} & Nature, dry & $2.2$ & $1.9$ & $1.3$ & $3.9$ & $0.04\;\star$\\
+\hspace{1em} & Nature, wet & $15.6$ & $14.0$ & $8.8$ & $27.6$ & $5.5 \times 10^{-4}\;\star\star$\\
+\addlinespace[0.3em]
+\multicolumn{7}{l}{\textbf{Forest}}\\
+\hspace{1em} & Forest, wet & $1.8$ & $1.8$ & $1.4$ & $2.3$ & $8.2 \times 10^{-3}\;\star$\\
+\hspace{1em} & Nature, dry & $1.9$ & $1.8$ & $1.5$ & $2.4$ & $2.7 \times 10^{-3}\;\star\star$\\
+\hspace{1em} & Nature, wet & $13.4$ & $13.1$ & $9.3$ & $18.5$ & $5.5 \times 10^{-4}\;\star\star$\\
+\addlinespace[0.3em]
+\multicolumn{7}{l}{\textbf{Forest, wet}}\\
+\hspace{1em} & Nature, wet & $7.5$ & $7.3$ & $5.0$ & $10.8$ & $5.5 \times 10^{-4}\;\star\star$\\
+\addlinespace[0.3em]
+\multicolumn{7}{l}{\textbf{Lake}}\\
+\hspace{1em} & Nature, wet & $4.6$ & $4.9$ & $1.7$ & $8.3$ & $3.3 \times 10^{-3}\;\star\star$\\
+\addlinespace[0.3em]
+\multicolumn{7}{l}{\textbf{Missing}}\\
+\hspace{1em} & Nature, wet & $10.0$ & $9.6$ & $6.1$ & $15.2$ & $5.5 \times 10^{-4}\;\star\star$\\
+\addlinespace[0.3em]
+\multicolumn{7}{l}{\textbf{Nature, dry}}\\
+\hspace{1em} & Nature, wet & $7.3$ & $7.2$ & $4.9$ & $9.9$ & $5.5 \times 10^{-4}\;\star\star$\\
+\addlinespace[0.3em]
+\multicolumn{7}{l}{\textbf{Road, not paved}}\\
+\hspace{1em} & Nature, wet & $9.6$ & $10.2$ & $5.8$ & $16.7$ & $5.5 \times 10^{-4}\;\star\star$\\
+\addlinespace[0.3em]
+\multicolumn{7}{l}{\textbf{Stream}}\\
+\hspace{1em} & Nature, wet & $9.7$ & $10.1$ & $6.2$ & $16.7$ & $5.5 \times 10^{-4}\;\star\star$\\
+\bottomrule
+\end{tabular}
+\end{table}

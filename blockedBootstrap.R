@@ -8,6 +8,7 @@ library(ggnewscale)
 library(extrafont)
 library(ggpubr)
 library(furrr)
+library(kableExtra)
 
 source("plotHelpers.R")
 
@@ -111,7 +112,7 @@ tracks_hab_class <- st_intersects(tracks %>%
 
 write_csv2(tracks_hab_class, "tracks_hab_class.csv")
 
-tracks_hab_class_blocks <- tracks_hab_class %>%
+tracks_hab_class_blocks <- read_csv2("final_project/tracks_hab_class.csv") %>%
   mutate(
     time = as.numeric(UTC_Time) / 86400 + as.numeric(as.Date(UTC_Date, "%d-%m-%Y")),
     time_block = cut_width(time, 7, boundary = 0, dig.lab = 50),
@@ -121,9 +122,9 @@ tracks_hab_class_blocks <- tracks_hab_class %>%
       replace_na("Missing") %>% 
       factor
   ) %>% 
-  count(UniqueID, time_block, lat_block, lon_block, type) %>% 
-  complete(UniqueID, time_block, lat_block, lon_block, type) %>% 
-  group_by(UniqueID, time_block, lat_block, lon_block) %>% 
+  count(UniqueID, time_block, type) %>% 
+  complete(UniqueID, time_block, type) %>% 
+  group_by(UniqueID, time_block) %>% 
   filter(sum(n, na.rm = T) > 0) %>% 
   mutate(f = n / sum(n, na.rm = T),
          w = sum(n, na.rm = T)) %>% 
@@ -139,7 +140,7 @@ tracks_hab_class_blocks <- tracks_hab_class %>%
 # Bootstrap
 plan("multisession", workers = 6)
 boot_habuse <- tibble(
-  boot = seq(1, 10000, 1) %>% 
+  boot = seq(1, 100000, 1) %>% 
     factor
 ) %>% 
   mutate(
@@ -154,10 +155,10 @@ boot_habuse <- tibble(
           Frequency = mean(f, na.rm = T)
         ) %>%
         drop_na %>% 
-        complete(Habitat) %>% 
+        complete(Habitat, fill = list(Frequency = 0)) %>% 
         mutate(
           Frequency = Frequency / sum(Frequency, na.rm = T),
-          Anomaly = Frequency - expectedFrequency[Habitat]
+          Selection = Frequency / expectedFrequency[Habitat]
         ) 
     }, .progress = T, .options = furrr_options(seed = T))
   ) %>% #
@@ -168,32 +169,32 @@ saveRDS(boot_habuse, "boot_habuse.RDS")
 
 # Plot
 habuse_anomaly_plt <- boot_habuse %>% 
-  mutate(Expected = Frequency - Anomaly) %>% 
+  # mutate(Expected = Frequency - Anomaly) %>% 
   group_by(Habitat) %>%
   mutate(
     first = row_number() == first(which(!is.na(Frequency))),
-    aM = mean(Anomaly, na.rm = T),
+    aM = mean(Selection, na.rm = T),
     fM = mean(Frequency, na.rm = T),
-    aMax = max(Anomaly, na.rm = T),
-    aMin = min(Anomaly, na.rm = T),
+    aMax = max(Selection, na.rm = T),
+    aMin = min(Selection, na.rm = T),
     Expected = 0
   ) %>% 
   mutate(
-    pVal = (n() - max(table(factor(sign(Anomaly), c(-1, 1)))) + 1) / (n() + 1),
+    pVal = (n() - max(table(factor(sign(Selection - 1), c(-1, 1)))) + 1) / (n() + 1),
     pVal = pmin(1, pVal * length(levels(Habitat))),
     significant = factor(pVal <= 0.05, c(TRUE, FALSE)),
     pVal = map2_chr(pVal, first, function(p, f) {
       if(f) label_pvalue_manual(p, type = "richtext", digits = 3) else NA
       }),
-    bw = bw.nrd0(Anomaly[!is.na(Anomaly)])
+    bw = bw.nrd0(Selection[!is.na(Selection)])
   ) %>%  
   ungroup %>% 
-  ggplot(aes(Anomaly, Habitat, fill = significant)) +
+  ggplot(aes(Selection, Habitat, fill = significant)) +
   geom_violin(
-    scale = "width", trim = F, linewidth = .5, adjust = 1, na.rm = T
+    scale = "width", trim = T, linewidth = .5, adjust = 1, na.rm = T
   ) +
   ggtext::geom_richtext(
-    aes(x = ifelse(first, aMax + bw * 5, NA),
+    aes(x = ifelse(first, aMax + bw * 0.5, NA),
         label = pVal),
     color = "transparent",
     fill = "white",
@@ -202,30 +203,43 @@ habuse_anomaly_plt <- boot_habuse %>%
     family = "Cambria",
     hjust = 0
   ) +
-  geom_vline(xintercept = 0, color = "firebrick", linetype = "dashed", linewidth = .75) +
+  geom_vline(xintercept = 1, color = "firebrick", linetype = "dashed", linewidth = .75) +
   scale_fill_brewer(palette = "Set2", direction = 1) +
-  scale_x_continuous(n.breaks = 10,
-                     labels = scales::label_percent(),
-                     expand = expansion(0, c(0, 0.1))) +
+  scale_x_continuous(n.breaks = 15,
+                     trans = "log1p",
+                     expand = expansion(0, c(0, 0.1)),
+                     breaks = c(0, 1, 2, 5, 10, 25, 50, 100)) +
   coord_cartesian(clip = "off") +
   theme(aspect.ratio = .5,
         legend.position = "none",
         panel.grid.major.y = element_line(colour = "gray75", linetype = "solid", linewidth = .25),
-        axis.title.x = element_text(margin = margin(.5,0,0,0,"cm"))) +
-  labs(y = NULL, x = "Habitat Use Anomaly")
+        axis.title.x = element_text(margin = margin(.5,0,0,0,"cm")),
+        plot.margin = margin(0,1.5,0,0,"cm")) +
+  labs(y = NULL, x = "Habitat Selection Coefficient")
 
 ggsave("habuse_anomaly.pdf", habuse_anomaly_plt,
        device = cairo_pdf,
-       width = 8, height = 4, scale = 2)
+       width = 8.5, height = 4, scale = 2)
 
 
 habuse_frequency_plt <- boot_habuse %>% 
   ggplot(aes(Frequency, Habitat, fill = Habitat)) +
   geom_violin(
-    scale = "width", trim = F, linewidth = .5, adjust = 1, na.rm = T
+    scale = "width", trim = T, linewidth = .5, adjust = 1, na.rm = T
+  ) +
+  geom_point(
+    color = "firebrick",
+    shape = 16,
+    size = 2,
+    data = tibble(
+      Frequency = expectedFrequency,
+      Habitat = names(Frequency)
+    )
   ) +
   scale_fill_brewer(palette = "Set3", direction = 1) +
   scale_x_continuous(labels = scales::label_percent(),
+                     # trans = "sqrt",
+                     breaks = seq(0,1,.1),
                      expand = expansion(0, c(0, .05))) +
   coord_cartesian(clip = "off", expand = T) +
   theme(aspect.ratio = .5,
@@ -239,14 +253,14 @@ ggsave("habuse_frequency.pdf", habuse_frequency_plt,
        width = 8, height = 4, scale = 2)
 
 habuse_comparison <- boot_habuse %>% 
-  select(!c(Anomaly)) %>% 
+  select(!c(Frequency)) %>% 
   group_by(boot) %>% 
   arrange(Habitat) %>% 
   summarize(
-    mat = set_names(Frequency, Habitat) %>% 
+    mat = set_names(Selection, Habitat) %>% 
       outer(
         ., .,
-        FUN = "-"
+        FUN = "/"
       ) %>%
       list
   ) %>% 
@@ -263,29 +277,64 @@ habuse_comparison <- boot_habuse %>%
     median = median(diff, na.rm = T),
     lower = quantile(diff, .05, na.rm = T),
     upper = quantile(diff, .95, na.rm = T),
-    pVal = (n() - max(table(factor(sign(diff), c(-1, 1)))) + 1) / (n() + 1),
+    pVal = (n() - max(table(factor(sign(diff - 1), c(-1, 1)))) + 1) / (n() + 1),
     # significant = factor(pVal <= 0.05, c(TRUE, FALSE)),
     # pVal = if (!is.na(pVal)) label_pvalue_manual(p, type = "richtext", digits = 3) else NA,
     .groups = "drop"
   )
 
+habuse_comparison %>% 
+  ggplot(aes(H1, fct_rev(H2), fill = mean)) +
+  geom_tile() +
+  scale_fill_viridis_c(trans = "log10",#abslog(10, 10),
+                       labels = scales::label_number(),
+                       option = "A",
+                       n.breaks = 6) +
+  scale_x_discrete(position = "top") +
+  coord_equal(expand = F) +
+  theme(axis.text.x.top = element_text(angle = 90, hjust = 0, vjust = .25,
+                                   margin = margin(0,0,2,0,"mm"))) +
+  labs(x = "H1", y = "H2", fill = "H1 - H2")
+
 write_csv2(habuse_comparison, "habuse_comparison.csv")
 
 habuse_comparison_table <- habuse_comparison %>% 
-  filter(H1 != H2 & sign(mean) == 1) %>% 
+  mutate(
+    H1 = factor(H1),
+    H2 = factor(H2,levels(H1))
+  ) %>% 
+  filter(as.integer(H1) < as.integer(H2)) %>% 
   mutate(pVal = pmin(1, pVal * n())) %>% 
-  filter(pVal <= 0.05) %>% 
-  # distinct(comb = map2_chr(H1, H2, ~paste0(sort(c(.x,.y)), collapse=",")),.keep_all = T) %>% 
-  # select(!comb) %>% 
+  filter(pVal <= 0.05) %>%
+  mutate(rn = row_number()) %>% 
+  nest(dat = !rn) %>% 
+  mutate(
+    dat = map(dat, function(x) {
+      if (x$mean >= 1) return(x)
+      
+      tibble(
+        H1 = x$H2,
+        H2 = x$H1,
+        mean = 1/x$mean,
+        median = 1/x$median,
+        lower = 1/x$upper,
+        upper = 1/x$lower,
+        pVal = x$pVal
+      )
+    })
+  ) %>% 
+  unnest(dat) %>% 
+  select(!rn) %>% 
   arrange(H1, H2) %>% 
-  mutate(pVal = label_pvalue_manual(pVal, "\\star", type = "latex", digits = 3)) 
+  mutate(pVal = label_pvalue_manual(pVal, "\\star", type = "latex", digits = 1)) 
 
 habuse_comparison_table %>% 
+  mutate(across(where(is.numeric), format_num_for_table)) %>% 
   # select(!H1) %>%
   mutate(H1 = "") %>% 
   kable(
     format = "latex", 
-    digits = 3,
+    # digits = 3,
     col.names = paste0(
       "\\multicolumn{1}{c}{", 
       c("\\textbf{Habitat}",
@@ -306,7 +355,8 @@ habuse_comparison_table %>%
   column_spec(7, latex_column_spec = ">{\\\\raggedleft\\\\arraybackslash}p{2.5cm}") %>%
   group_rows(
     index = habuse_comparison_table$H1 %>% 
-      table
+      table %>% 
+      extract(. != 0)
   ) %>% 
   write_lines("habuse_comparison.txt")
 

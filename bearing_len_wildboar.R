@@ -4,14 +4,18 @@ library(magrittr)
 library(dplyr)
 library(geosphere)
 library(broom)
+library(units)
+library(mgcViz)
+library(extrafont)
+library(kableExtra)
+source("statistical_helpers.R")
+source("plotHelpers.R")
+library(patchwork)
+library(furrr)
 
-
-Wildboar_gpstracks <- read_delim("data/Wildboar_gpstracks.csv", 
-                                 delim = ";", 
-                                 escape_double = FALSE, 
-                                 trim_ws = TRUE) %>% 
-  mutate(UTC_Date = as.Date(UTC_Date, format = "%d-%m-%Y"))
-
+conflicted::conflict_prefer("select", "dplyr")
+conflicted::conflict_prefer("filter", "dplyr")
+conflicted::conflict_prefer("lag", "dplyr")
 
 calculate_bearing <- function(lat1, lon1, lat2, lon2) {
   y <- lat2 - lat1
@@ -19,13 +23,6 @@ calculate_bearing <- function(lat1, lon1, lat2, lon2) {
   bearing <- atan2(y, x) / (2 * pi) * 360
   return(bearing)
 }
-
-tracks_hab_class <- read_delim("Final_project/tracks_hab_class.csv", 
-                               delim = ";", escape_double = FALSE, trim_ws = TRUE,
-                               locale = locale(decimal_mark = ",", grouping_mark = ".")) %>% 
-  mutate(UTC_Date = as.Date(UTC_Date, format = "%d-%m-%Y")) %>% 
-  arrange(UniqueID, UTC_Date, UTC_Time)
-
 
 continuous_blocks <- function(n, width) {
   current_block <- 1
@@ -41,8 +38,43 @@ continuous_blocks <- function(n, width) {
   blocks
 }
 
-bearing_step_length_data <- Wildboar_gpstracks %>% 
-  mutate(habitat_type = tracks_hab_class$type) %>% 
+angle_three <- function(x,y, type = "degrees") {
+  a <- c(x[1], y[1])
+  b <- c(x[2], y[2])
+  c <- c(x[3], y[3])
+  
+  ab <- b - a
+  bc <- c - b
+  
+  type <- pmatch(type, c("degrees", "radians", "cosine", "turning"))
+  
+  out <- sum(ab * bc) / (sqrt(sum(ab^2)) * sqrt(sum(bc^2)))
+  if (type == 4) return(1 - ((out + 1) / 2))
+  if (type == 3) return(out)
+  out <- acos(out)
+  if (type == 2) return(out)
+  if (type == 1) return(out / (2 * pi) * 360)
+  stop("type must be one of degrees, radians, cosine or turning, or an abbreviation of these.")
+}
+
+angle_three_vec <- function(x, y, ...) {
+  angles <- vector("double", length(x))
+  for (i in 1:length(x)) {
+    if (i == 1 | i == length(x)) {
+      angles[i] <- NA
+    }
+    else {
+      angles[i] <- angle_three(x[(i - 1):(i + 1)], y[(i - 1):(i + 1)], ...)
+    }
+  }
+  angles
+}
+
+tracks_hab_class <- read_delim("Final_project/tracks_hab_class.csv", 
+                               delim = ";", escape_double = FALSE, trim_ws = TRUE,
+                               locale = locale(decimal_mark = ",", grouping_mark = ".")) %>% 
+  mutate(UTC_Date = as.Date(UTC_Date, format = "%d-%m-%Y")) %>% 
+  arrange(UniqueID, UTC_Date, UTC_Time) %>% 
   group_by(UniqueID) %>% 
   arrange(Timestamp) %>% 
   mutate(
@@ -50,172 +82,311 @@ bearing_step_length_data <- Wildboar_gpstracks %>%
   ) %>% 
   group_by(UniqueID, block) %>% 
   slice_head(n = 1) %>% 
+  ungroup %>% 
+  rename("Habitat" = "type") %>% 
+  select(!block) %>% 
+  drop_na
+
+tracks_turning <- tracks_hab_class %>% 
   group_by(UniqueID) %>% 
   arrange(Timestamp) %>% 
-  reframe(
-    bearing = calculate_bearing(
-      Latitude, 
-      Longitude, 
-      lag(Latitude, default = NA), 
-      lag(Longitude, default = NA)
-    )[-1],
-    
-    distance = distVincentySphere(
+  mutate(
+    turning = angle_three_vec(Longitude, Latitude, "turning"),
+    length = distVincentySphere(
       cbind(Longitude, Latitude),
       cbind(lag(Longitude), lag(Latitude))
-    )[-1],
-    
-    habitat_type = ifelse(
-      habitat_type != lag(habitat_type, default = "DUMMY"),
-      paste0(habitat_type, "-->", lag(habitat_type)),
-      habitat_type
-    )[-1],
-    
-    time_start = Timestamp[-n()],
-    time_length = diff(Timestamp) %>% 
+    ),
+    deltaTime = (Timestamp - lag(Timestamp)) %>% 
       as_units %>% 
       set_units(s) %>% 
-      drop_units
+      drop_units,
+    velocity = length / deltaTime,
+    time = Timestamp
   ) %>% 
+  ungroup %>% 
+  filter(is.finite(length)) %>% 
+  drop_na %>% 
   mutate(
-    velocity = distance / time_length
+    day = lubridate::yday(Timestamp) + lubridate::year(Timestamp) / 365.25,
+    hour = as.numeric(hms::as_hms(Timestamp)) / 86400 * 24,
+    UniqueID = factor(UniqueID),
+    Habitat = factor(Habitat),
+    Sex = factor(Sex)
   ) %>% 
-  filter(velocity <= 10 & time_length <= 4000) 
+  arrange(Timestamp)
 
-bearing_step_length_data$time_length %>% 
-  hist(1000)
+turning_trans <- beta_trans(tracks_turning$turning, threshold = c(1e-09, 1 - 1e-09))
+oldPar <- par(mfrow = c(1,2))
+hist(turning_trans$transform(tracks_turning$turning),100)
+curve(turning_trans$transform(x),0,1)
+par(oldPar)
 
-tracks_bearing <- bearing_step_length_data %>% 
-  group_by(UniqueID) %>% 
-  arrange(time_start) %>% 
-  reframe(
-    bearing_change = diff(bearing),
-    time = time_start[-n()],
-    habitat_type = ifelse(
-      str_detect(habitat_type, "-->"),
-      str_extract(habitat_type, "(?<=-->).+"),
-      habitat_type
-    )[-n()]
+# velocity_trans <- dist_trans(tracks_turning$velocity, dist = "gamma", start = list(shape = -1, rate = .01))
+# oldPar <- par(mfrow = c(1,2))
+# hist(velocity_trans$transform(tracks_turning$velocity),100)
+# curve(velocity_trans$transform(x),0,max(tracks_turning$velocity))
+# par(oldPar)
+
+turning_velocity_hist <- tracks_turning %>% 
+  select(turning, velocity) %>% 
+  rename_with(~ifelse(. == "turning", "\\textbf{Turning} ($\\alpha$)", "\\textbf{Velocity} ($m/s$)") %>% 
+                latex2exp::TeX(output = "character")) %>%
+  pivot_longer(everything(), names_to = "trait") %>% 
+  mutate(
+    transformed = ifelse(
+      str_detect(trait, "Turning"),
+      turning_trans$transform(value),
+      log10(value)
+    )
+  ) %>% 
+  rename("raw" = "value") %>% 
+  pivot_longer(!trait, names_to = "type") %>% 
+  nest(dat = !type) %>% 
+  mutate(
+    plt = map2(type, dat, function(t, d) {
+      d %>% 
+        group_by(trait) %>% 
+        mutate(value = if (t == "transformed") as.vector(scale(value)) else value) %>% 
+        ggplot(aes(value)) +
+        geom_histogram(color = "gray35",
+                       bins = 200) +
+        facet_wrap(~trait, nrow = 1,
+                   scales = "free_x", labeller = label_parsed) +
+        coord_cartesian(expand = F) + 
+        labs(x = NULL) +
+        theme(panel.spacing.x = unit(10, "mm"),
+              strip.background = if (t == "transformed") element_blank() else element_rect(),
+              strip.text = if (t == "transformed") element_blank() else element_text())
+    })
+  ) %>% 
+  pull(plt) %>% 
+  wrap_plots(nrow = 2) +
+  plot_annotation(
+    tag_levels = "A",
+    tag_prefix = "(",
+    tag_suffix = ")"
   )
 
-tracks_len_block <- bearing_step_length_data %>% 
+ggsave("turning_velocity_transformed_hist.pdf", turning_velocity_hist,
+       device = cairo_pdf,
+       width = 4, height = 4, scale = 2)
+
+velocity_turning_scaled <- tracks_turning %>% 
+  select(velocity, turning) %>% 
+  mutate(velocity = log10(velocity),
+         turning = turning_trans$transform(turning)) %>%
+  mutate(across(everything(), scale))
+
+velocity_turning_pca <- velocity_turning_scaled %>% 
+  mutate(across(everything(), as.vector)) %>% 
+  princomp
+
+velocity_turning_pca_vectors <- velocity_turning_pca$loadings %>% 
+  unclass() %>% 
+  t %>% 
+  multiply_by(velocity_turning_pca$sdev^2) %>% 
+  as.data.frame() %>% 
+  rownames_to_column("variable") %>% 
+  as_tibble %>% 
   mutate(
-    # lat_bin = cut_interval(Latitude, 10, boundary = 0),
-    # lon_bin = cut_interval(Longitude, 10, boundary = 0)
-    time_bin = cut_width(time_start, 7 * 86400, boundary = 0)
+    across(!variable, ~ tibble(
+      end = (.x * attr(velocity_turning_scaled[[cur_column()]], "scaled:scale")) + attr(velocity_turning_scaled[[cur_column()]], "scaled:center"),
+      start = attr(velocity_turning_scaled[[cur_column()]], "scaled:center")
+    ))
   ) %>% 
-  group_by(UniqueID, habitat_type, time_bin) %>% 
-  summarize(
-    velocity = mean(velocity),
-    .groups = "drop"
+  unnest(everything(), names_sep = "_") %>% 
+  mutate(
+    velocity_end_adj = velocity_end + 0 * (velocity_end - velocity_start),
+    turning_end_adj  = turning_end  + 0.5 * (turning_end  - turning_start)
+  ) %>%
+  mutate(
+    across(contains("velocity"), ~10^.x),
+    across(contains("turning"), ~turning_trans$inverse(.x))
+  ) %>%
+  mutate(
+    sdev = velocity_turning_pca$sdev,
+    variance = sdev^2,
+    explained = variance/sum(variance),
+    variable = str_replace(variable, "^Comp\\.", "PC")
   ) 
 
-tracks_len_block %>% 
-  filter(!str_detect(habitat_type, "-->")) %>% 
-  ggplot(aes(velocity, habitat_type)) +
-  geom_violin(scale = "width") +
-  scale_x_log10()
 
-tracks_angle_block <- tracks_bearing %>% 
-  mutate(
-    # lat_bin = cut_interval(Latitude, 10, boundary = 0),
-    # lon_bin = cut_interval(Longitude, 10, boundary = 0)
-    time_bin = cut_width(time, 7 * 86400, boundary = 0)
+velocity_turning_plt <- tracks_turning %>% 
+  ggplot(aes(velocity, turning)) +
+  geom_hex(
+    aes(color = after_scale(colorspace::darken(fill, .01, "absolute"))),
+    bins = 25,
+    linewidth = .05
+  ) +
+  geom_segment(
+    aes(x = velocity_start, xend = velocity_end,
+        y = turning_start, yend = turning_end),
+    data = velocity_turning_pca_vectors,
+    color = "white",
+    inherit.aes = F,
+    arrow = arrow(angle = 30, length = unit(6, "mm"), type = "open"),
+    linewidth = 1.5
+  ) +
+  geom_label(
+    aes(x = velocity_end_adj,
+        y = turning_end_adj,
+        label = paste0(variable, " (", scales::label_percent(.1)(explained), ")")),
+    data = velocity_turning_pca_vectors,
+    label.padding = unit(2.25, "mm"),
+    color = "white",
+    fill = "#00000099",
+    fontface = "bold",
+    vjust = 0.3,
+    size = 6,
+    inherit.aes = F
+  ) +
+  scale_y_continuous(trans = turning_trans,
+                     n.breaks = 10,
+                     labels = ~label_prettify_scientific_beta(T, 2, c(0, 0))(print(.))) +
+  scale_x_log10(labels = prettify_scientific) +
+  scale_fill_viridis_c(
+    trans = abslog(10),
+    option = "A",
+    limits = c(0, 1000),
+    labels = label_prettify_scientific(T, 2, baseRange = c(-1,1)),
+    n.breaks = 8,
+    guide = guide_colorbar()
+  ) +
+  coord_cartesian(expand = F) +
+  ggpubr::theme_pubr(
+    base_family = "CMU Serif",
+    legend = "right"
+  ) +
+  theme(
+    aspect.ratio = 1,
+    title = element_text(face = "bold",
+                         size = 14),
+    plot.background = element_blank(),
+    panel.background = element_rect(fill = "black"),
+    legend.box.background = element_blank(),
+    legend.background = element_blank(),
+    legend.key.height = unit(3, "cm")
+  ) +
+  labs(fill = "Count", x = "Velocity (m/s)", y = "Turning")
+
+ggsave("velocity_turning_pca.pdf", align_legend(velocity_turning_plt),
+       device = cairo_pdf,
+       width = 4.5, height = 4, scale = 2)
+
+tracks_turning %>% 
+  bind_cols(
+    velocity_turning_pca$scores %>% 
+      set_colnames(paste0("PC", 1:ncol(.))) %>% 
+      as_tibble
   ) %>% 
-  group_by(UniqueID, habitat_type, time_bin) %>% 
+  filter(Habitat != "Missing") %>%
+  mutate(
+    Habitat = c("Open", "Closed")[1 + str_detect(Habitat, regex("forest", T))]
+  ) %>% 
+  ggplot(aes(velocity, turning, z = PC1)) +
+  stat_summary_hex() +
+  scale_x_log10() +
+  scale_y_continuous(trans = turning_trans,
+                     n.breaks = 10,
+                     labels = label_prettify_scientific_beta(T,2)) +
+  scale_fill_viridis_c()
+
+spurtiness_blocks <- tracks_turning %>% 
+  bind_cols(
+    velocity_turning_pca$scores %>% 
+      set_colnames(paste0("PC", 1:ncol(.))) %>% 
+      as_tibble
+  ) %>% 
+  filter(Habitat != "Missing") %>%
+  mutate(
+    Habitat = c("Open", "Closed")[1 + str_detect(Habitat, regex("forest", T))]
+  ) %>% 
+  mutate(
+    time = as.numeric(UTC_Time) / 86400 + as.numeric(as.Date(UTC_Date, "%d-%m-%Y")),
+    time_block = cut_width(time, 7, boundary = 0, dig.lab = 50),
+    lat_block = cut_interval(Latitude, 1),
+    lon_block = cut_interval(Longitude, 1),
+    time_of_day = c("[00-06)","[06-12)","[12-18)","[18-24)")[1 + floor(lubridate::hour(UTC_Time) / 6)] %>% 
+      factor
+  ) %>% 
+  group_by(UniqueID, time_block, Habitat, time_of_day) %>% 
   summarize(
-    cos_angle = mean(cos(bearing_change / 360 * pi)),
+    across(contains("PC"), mean),
     .groups = "drop"
-  ) 
+  ) %>% 
+  select(!PC2) %>% 
+  pivot_wider(
+    id_cols = c(UniqueID, time_block, time_of_day),
+    names_from = Habitat,
+    values_from = PC1
+  ) %>% 
+  mutate(
+    Difference = Open - Closed
+  ) %>% 
+  nest(dat = !UniqueID)
 
-tracks_angle_block %>% 
-  ggplot(aes(cos_angle, habitat_type)) +
-  geom_violin(scale = "width") 
-  # scale_y_discrete(expand = expansion(add = c(10, 0))) +
-  # coord_polar()
-
-
-angle_type_boot <- map(1:1000, function(boot) {
-  tracks_len_angle %>% 
-    nest(dat = !type) %>% 
+plan("multisession", workers = 6)
+spurtines_boot <- future.apply::future_lapply(1:100000, function(boot) {
+  spurtiness_blocks %>% 
+    slice_sample(replace = T) %>% 
     mutate(
-      dat = map(dat, ~slice_sample(.x, n = nrow(.x), replace = T))
+      dat = map(dat, ~slice_sample(.x, replace = T))
     ) %>% 
     unnest(dat) %>% 
-    group_by(type) %>% 
+    group_by(time_of_day) %>% 
     summarize(
-      m = mean(angle, na.rm = T),
-      # v = sapply(c(0.05, .5, .95), function(q) quantile(angle, q)),
-      # q = c(0.05, .5, 95),
-      .groups = "drop"
+      across(c(Open, Closed, Difference), ~mean(.x, na.rm = T))
     ) %>% 
-    mutate(boot = boot)
-}, .progress = T)
-
-
-angle_type_boot %>% 
-  bind_rows %>% 
-  ggplot(aes(m, type)) +
-  geom_violin(scale = "width")
-
-
-angle_type_boot %>% 
-  bind_rows %>% 
-  filter(type %in% c("Nature, dry", "Artificial")) %>% 
-  pivot_wider(
-    id_cols = boot,
-    names_from = type,
-    values_from = m
-  ) %>% 
-  mutate(
-    diff = `Nature, dry` - `Artificial`,
-    sign = factor(sign(diff), c(-1, 0, 1))
-  ) %>% 
-  summarize(
-    p.value = (min(table(sign)[c("-1", "1")]) + 1)/(n() + 1)
-  )
-  ggplot(aes(`Nature, dry`, `Artificial`, color = `Nature, dry` > `Artificial`)) +
-  geom_point() +
-  coord_equal(xlim = 0:1, ylim = 0:1) +
-  geom_abline(slope = 1, intercept = 0) 
-  
-  
-pair_emp_pval <- angle_type_boot %>% 
-    bind_rows %>% 
-    group_by(boot) %>% 
-    arrange(type) %>% 
-    summarize(
-      mat = set_names(m, type) %>% 
-        outer(
-          ., .,
-          FUN = "-"
-        ) %>%
-        list
-    ) %>% 
-    mutate(mat = map(mat, function(m) {
-      as.data.frame(m) %>% 
-        rownames_to_column("H1") %>% 
-        as_tibble %>% 
-        pivot_longer(!H1, names_to = "H2", values_to = "diff")
-    })) %>% 
-    unnest(mat) %>% 
-    group_by(H1, H2) %>% 
-    summarize(
-      mean = mean(diff, na.rm = T),
-      median = median(diff, na.rm = T),
-      lower = quantile(diff, .05, na.rm = T),
-      upper = quantile(diff, .95, na.rm = T),
-      pVal = (n() - max(table(factor(sign(diff), c(-1, 1)))) + 1) / (n() + 1),
-      # significant = factor(pVal <= 0.05, c(TRUE, FALSE)),
-      # pVal = if (!is.na(pVal)) label_pvalue_manual(p, type = "richtext", digits = 3) else NA,
-      .groups = "drop"
+    mutate(
+      boot = boot
     )
+})
+plan("sequential")
 
-pair_emp_pval %>% 
-  ggplot(aes(H1, H2, fill = abs(median))) +
-  geom_tile() +
-  scale_fill_viridis_c(trans = "log10") +
-  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+spurtines_boot %>% 
+  bind_rows %>% 
+  pivot_longer(!c(time_of_day, boot), names_to = "Variable", values_to = "PC1") %>% 
+  filter(Variable != "Difference") %>% 
+  ggplot(aes(PC1, time_of_day, fill = Variable)) +
+  geom_violin(scale = "width") 
 
+spurtiness_tab <- spurtines_boot %>% 
+  bind_rows %>% 
+  group_by(time_of_day) %>% 
+  summarize(
+    total = mean(Open + Closed, na.rm = T)/2,
+    mean = mean(Difference, na.rm = T),
+    median = median(Difference, na.rm = T),
+    ll = quantile(Difference, .05, na.rm = T),
+    ul = quantile(Difference, .95, na.rm = T),
+    pVal = factor(sign(Difference), c(-1, 1)) %>% 
+      table %>% 
+      min %>% 
+      add(1) %>% 
+      divide_by(n() + 1)
+  ) 
 
-
+spurtiness_tab %>% 
+  mutate(pVal = label_pvalue_manual(pVal, digits = 3, type = "latex")) %>% 
+  mutate(across(where(is.numeric), ~format_num_for_table(.x, digits = .01, nsmall = 2))) %>% 
+  kable(
+    format = "latex", 
+    # digits = 3,
+    col.names = paste0(
+      "\\multicolumn{1}{c}{", 
+      c("\\makecell{\\textbf{Time of}\\\\\\textbf{Day}}",
+        "$\\mathbf{\\mu_{PC1}}$",
+        "$\\mathbf{\\mu_\\Delta}$",
+        "$\\mathbf{\\mathrm{Q}_{50\\%}}$",
+        "$\\mathbf{\\mathrm{Q}_{5\\%}}$",
+        "$\\mathbf{\\mathrm{Q}_{95\\%}}$",
+        "\\textbf{P-value}"),
+      "}"),
+    align = "r", 
+    booktabs = T, 
+    escape = F) %>%
+  kable_styling(full_width = F) %>%
+  column_spec(1, latex_column_spec = ">{\\\\centering\\\\arraybackslash}p{1.5cm}") %>% 
+  column_spec(2:6, latex_column_spec = ">{\\\\raggedleft\\\\arraybackslash}p{1cm}") %>%
+  column_spec(7, latex_column_spec = ">{\\\\raggedleft\\\\arraybackslash}p{1cm}") %>%
+  write_lines("spurtiness_comparison.txt")

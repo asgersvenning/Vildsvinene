@@ -1,0 +1,13 @@
+\begin{table}
+\centering
+\begin{tabular}{>{\centering\arraybackslash}p{1.5cm}>{\raggedleft\arraybackslash}p{1cm}>{\raggedleft\arraybackslash}p{1cm}>{\raggedleft\arraybackslash}p{1cm}>{\raggedleft\arraybackslash}p{1cm}>{\raggedleft\arraybackslash}p{1cm}>{\raggedleft\arraybackslash}p{1cm}}
+\toprule
+\multicolumn{1}{c}{\makecell{\textbf{Time of}\\\textbf{Day}}} & \multicolumn{1}{c}{$\mathbf{\mu_{PC1}}$} & \multicolumn{1}{c}{$\mathbf{\mu_\Delta}$} & \multicolumn{1}{c}{$\mathbf{\mathrm{Q}_{50\%}}$} & \multicolumn{1}{c}{$\mathbf{\mathrm{Q}_{5\%}}$} & \multicolumn{1}{c}{$\mathbf{\mathrm{Q}_{95\%}}$} & \multicolumn{1}{c}{\textbf{P-value}}\\
+\midrule
+{}[00-06) & $-0.42$ & $-0.02$ & $-0.11$ & $-0.85$ & $1.04$ & $0.322\;$\\
+{}[06-12) & $0.25$ & $-0.08$ & $-0.09$ & $-1.43$ & $1.20$ & $0.429\;$\\
+{}[12-18) & $0.59$ & $-0.10$ & $-0.08$ & $-1.20$ & $1.00$ & $0.383\;$\\
+{}[18-24) & $0.07$ & $0.05$ & $0.05$ & $-0.95$ & $1.11$ & $0.407\;$\\
+\bottomrule
+\end{tabular}
+\end{table}
